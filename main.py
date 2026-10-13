@@ -19,6 +19,16 @@ STRING_SESSION = os.environ.get("STRING_SESSION")
 OWNER_ID = int(os.environ.get("OWNER_ID", "7885190981"))
 SUDO_USERS = [OWNER_ID]
 
+# Railway environment variable se cookies.txt file likhna
+COOKIE_FILE = "cookies.txt"
+yt_cookie_env = os.environ.get("YT_COOKIES")
+if yt_cookie_env:
+    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
+        f.write(yt_cookie_env.strip())
+    print("✅ cookies.txt successfully written from YT_COOKIES variable!")
+else:
+    print("⚠️ YT_COOKIES environment variable not found!")
+
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
 call_py = PyTgCalls(user)
@@ -74,41 +84,6 @@ def add_watermark(image_bytes: bytes) -> io.BytesIO:
     except Exception as e:
         print(f"Watermark error: {e}")
         return io.BytesIO(image_bytes)
-
-async def search_saavn(query: str):
-    """Saavn API fallback: Cloud servers par YouTube block bypass karta hai"""
-    api_url = f"https://saavn.dev/api/search/songs?query={query}&page=1&limit=1"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    results = data.get("data", {}).get("results", [])
-                    if results:
-                        song = results[0]
-                        title = song.get("name", "Unknown Title")
-                        duration = str(int(song.get("duration", 0)) // 60) + ":" + str(int(song.get("duration", 0)) % 60).zfill(2)
-                        
-                        thumb = None
-                        images = song.get("image", [])
-                        if images:
-                            thumb = images[-1].get("url")
-
-                        download_links = song.get("downloadUrl", [])
-                        stream_url = None
-                        if download_links:
-                            stream_url = download_links[-1].get("url")
-
-                        if stream_url:
-                            return {
-                                "title": title,
-                                "duration": duration,
-                                "stream_url": stream_url,
-                                "thumb": thumb
-                            }
-    except Exception as e:
-        print(f"Saavn API error: {e}")
-    return None
 
 # --- START & INFO COMMANDS ---
 @bot.on_message(filters.command(["start", "help"]))
@@ -169,50 +144,31 @@ async def play_handler(client, message):
     query = " ".join(message.command[1:])
     m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
 
-    stream_url = None
-    title = None
-    thumb_url = None
-    duration = "Unknown"
+    ydl_opts = {
+        "format": "bestaudio/best" if not is_video else "best",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "nocheckcertificate": True,
+        "geo_bypass": True,
+        "source_address": "0.0.0.0",
+    }
 
-    # Step 1: Saavn bypass check (100% cloud-friendly, zero bot-detection)
-    if not is_video and not ("http://" in query or "https://" in query):
-        saavn_res = await search_saavn(query)
-        if saavn_res:
-            stream_url = saavn_res["stream_url"]
-            title = saavn_res["title"]
-            thumb_url = saavn_res["thumb"]
-            duration = saavn_res["duration"]
+    if os.path.exists(COOKIE_FILE):
+        ydl_opts["cookiefile"] = COOKIE_FILE
 
-    # Step 2: YouTube Fallback (Link ya Video ke liye)
-    if not stream_url:
-        ydl_opts = {
-            "format": "bestaudio/best" if not is_video else "best",
-            "noplaylist": True,
-            "quiet": True,
-            "nocheckcertificate": True,
-            "geo_bypass": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "ios"]
-                }
-            }
-        }
-        if os.path.exists("cookies.txt"):
-            ydl_opts["cookiefile"] = "cookies.txt"
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                target = query if ("http://" in query or "https://" in query) else f"ytsearch:{query}"
-                info = ydl.extract_info(target, download=False)
-                if 'entries' in info:
-                    info = info['entries'][0]
-                stream_url = info['url']
-                title = info.get('title', query)
-                thumb_url = info.get('thumbnail')
-                duration = info.get('duration_string', 'Unknown')
-        except Exception as e:
-            if not stream_url:
-                return await m.edit(f"❌ Error: {e}")
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            target = query if ("http://" in query or "https://" in query) else f"ytsearch:{query}"
+            info = ydl.extract_info(target, download=False)
+            if 'entries' in info:
+                info = info['entries'][0]
+            stream_url = info['url']
+            title = info.get('title', query)
+            thumb_url = info.get('thumbnail')
+            duration = info.get('duration_string', 'Unknown')
+    except Exception as e:
+        return await m.edit(f"❌ Error: {e}")
 
     caption = (
         f"👑 **रोहित चौहान Music Bot**\n\n"
