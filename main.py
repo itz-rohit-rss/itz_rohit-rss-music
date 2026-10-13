@@ -2,6 +2,7 @@ import os
 import io
 import random
 import asyncio
+import shutil
 from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -10,6 +11,14 @@ from pytgcalls.types import MediaStream
 import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
+
+# Static FFmpeg & FFprobe setup for cloud hosting
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+    print("✅ Static FFmpeg & FFprobe loaded successfully into PATH!")
+except Exception as e:
+    print(f"⚠️ static_ffmpeg load note: {e}")
 
 # Configs from Environment
 API_ID = int(os.environ.get("API_ID"))
@@ -160,7 +169,7 @@ async def play_handler(client, message):
         except Exception as yt_err:
             print(f"YouTube block encountered ({yt_err}). Auto-switching to high-speed cloud stream...")
 
-        # Automatic Cloud Fallback: SoundCloud (Zero bot blocks, works 100% on cloud)
+        # Automatic Cloud Fallback: SoundCloud
         sc_opts = {
             "format": "bestaudio/best",
             "noplaylist": True,
