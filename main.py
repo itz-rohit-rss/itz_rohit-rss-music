@@ -78,7 +78,6 @@ def add_watermark(image_bytes: bytes) -> io.BytesIO:
 # --- START & INFO COMMANDS ---
 @bot.on_message(filters.command(["start", "help"]))
 async def start_handler(client, message):
-    print(f"Received start command from {message.from_user.id}")
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         registered_groups.add(message.chat.id)
 
@@ -135,7 +134,17 @@ async def play_handler(client, message):
     query = " ".join(message.command[1:])
     m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
 
-    ydl_opts = {"format": "bestaudio/best" if not is_video else "best", "noplaylist": True, "quiet": True}
+    ydl_opts = {
+        "format": "bestaudio/best" if not is_video else "best",
+        "noplaylist": True,
+        "quiet": True,
+        "nocheckcertificate": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios"]
+            }
+        }
+    }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
@@ -305,6 +314,14 @@ async def puzzle_callback(client, callback_query: CallbackQuery):
 async def start_services():
     await bot.start()
     await user.start()
+    
+    # Dialogs cache populate karna taaki Peer id invalid error na aaye
+    try:
+        async for dialog in user.get_dialogs(limit=30):
+            pass
+    except Exception:
+        pass
+
     try:
         await call_py.start()
     except Exception as e:
