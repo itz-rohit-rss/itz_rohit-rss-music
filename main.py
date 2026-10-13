@@ -5,8 +5,7 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pytgcalls import PyTgCalls
-from pytgcalls.types.input_stream import AudioPiped, AudioVideoPiped
-from pytgcalls.types.input_stream.quality import HighQualityVideo
+from pytgcalls.types import MediaStream
 import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
@@ -35,6 +34,7 @@ RANDOM_TAG_MESSAGES = [
     "Group me thoda sannata tod do dosto!",
     "Jalwa dekho aur online aao jaldi!"
 ]
+
 def add_watermark(image_bytes: bytes) -> io.BytesIO:
     """Adds a bold branded watermark bar on the song thumbnail"""
     try:
@@ -122,7 +122,8 @@ async def sudo_handler(client, message):
         "• **Sudo Privileges:** Full Bot Access & Server Controls"
     )
     await message.reply_text(text, disable_web_page_preview=True)
-    # --- PLAY & VIDEO PLAY ---
+
+# --- PLAY & VIDEO PLAY ---
 @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
 async def play_handler(client, message):
     registered_groups.add(message.chat.id)
@@ -157,10 +158,8 @@ async def play_handler(client, message):
     ])
 
     try:
-        if is_video:
-            await call_py.join_group_call(message.chat.id, AudioVideoPiped(stream_url, HighQualityVideo()))
-        else:
-            await call_py.join_group_call(message.chat.id, AudioPiped(stream_url))
+        stream = MediaStream(stream_url, video_flags=MediaStream.Flags.IGNORE if not is_video else None)
+        await call_py.play(message.chat.id, stream)
     except Exception as e:
         return await m.edit(f"VC join error: {e}")
 
@@ -197,11 +196,12 @@ async def resume_handler(client, message):
 @bot.on_message(filters.command(["skip", "next", "stop"]) & filters.group)
 async def stop_handler(client, message):
     try:
-        await call_py.leave_group_call(message.chat.id)
+        await call_py.leave_call(message.chat.id)
         await message.reply_text("⏹️ **Gaana Stop/Skip kar diya gaya hai.**")
     except Exception as e:
         await message.reply_text(f"Error: {e}")
-    # --- TAGGING SYSTEM ---
+
+# --- TAGGING SYSTEM ---
 @bot.on_message(filters.command(["tagall", "tag", "vctag"]) & filters.group)
 async def tag_handler(client, message):
     registered_groups.add(message.chat.id)
@@ -311,4 +311,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
