@@ -2,7 +2,7 @@ import os
 import io
 import random
 import asyncio
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pytgcalls import PyTgCalls
@@ -75,9 +75,10 @@ def add_watermark(image_bytes: bytes) -> io.BytesIO:
         print(f"Watermark error: {e}")
         return io.BytesIO(image_bytes)
 
-# --- START & INFO COMMANDS (DM & GROUP BOTH SUPPORTED) ---
+# --- START & INFO COMMANDS ---
 @bot.on_message(filters.command(["start", "help"]))
 async def start_handler(client, message):
+    print(f"Received start command from {message.from_user.id}")
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         registered_groups.add(message.chat.id)
 
@@ -301,7 +302,7 @@ async def puzzle_callback(client, callback_query: CallbackQuery):
         await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
 
 # --- BOT LAUNCH ---
-async def main():
+async def start_services():
     await bot.start()
     await user.start()
     try:
@@ -311,7 +312,9 @@ async def main():
 
     print("🔥 Rohit Chauhan's Custom Bot is LIVE & Dominating! 🔥")
     asyncio.create_task(hourly_puzzle_loop())
-    await asyncio.Event().wait()
+    await idle()
+    await bot.stop()
+    await user.stop()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.get_event_loop().run_until_complete(start_services())
