@@ -23,9 +23,10 @@ bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
 call_py = PyTgCalls(user)
 
-# Active Tags Tracker & Scores
+# Active Trackers & Storage
 active_tags = {}
 user_scores = {}
+registered_groups = set()
 
 RANDOM_TAG_MESSAGES = [
     "Kahan so rahe ho sab? Active ho jao!",
@@ -34,33 +35,29 @@ RANDOM_TAG_MESSAGES = [
     "Group me thoda sannata tod do dosto!",
     "Jalwa dekho aur online aao jaldi!"
 ]
-
 def add_watermark(image_bytes: bytes) -> io.BytesIO:
-    """Adds a bold branded 'रोहित चौहान' watermark bar on the song thumbnail"""
+    """Adds a bold branded watermark bar on the song thumbnail"""
     try:
         image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         width, height = image.size
 
-        # Create overlay
         overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        # Highlight Banner at Bottom
-        bar_height = int(height * 0.18)
-        draw.rectangle([(0, height - bar_height), (width, height)], fill=(0, 0, 0, 190))
-        
-        # Border accent line (Royal Gold/Red highlight)
-        draw.rectangle([(0, height - bar_height), (width, height - bar_height + 6)], fill=(255, 69, 0, 255))
+        bar_height = max(int(height * 0.18), 50)
+        draw.rectangle([(0, height - bar_height), (width, height)], fill=(0, 0, 0, 205))
+        draw.rectangle([(0, height - bar_height), (width, height - bar_height + 5)], fill=(255, 69, 0, 255))
 
-        text = "👑 BOT OWNER: रोहित चौहान 👑"
+        text = "👑 BOT OWNER: ROHIT CHAUHAN (रोहित चौहान) 👑"
         
-        # Try finding a font or default
         try:
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", int(bar_height * 0.45))
-        except:
-            font = ImageFont.load_default()
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(bar_height * 0.38))
+        except Exception:
+            try:
+                font = ImageFont.truetype("arial.ttf", int(bar_height * 0.38))
+            except Exception:
+                font = ImageFont.load_default()
 
-        # Center text
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
@@ -81,12 +78,15 @@ def add_watermark(image_bytes: bytes) -> io.BytesIO:
 # --- START & INFO COMMANDS ---
 @bot.on_message(filters.command(["start", "help"]))
 async def start_handler(client, message):
+    if message.chat.type.value in ["group", "supergroup"]:
+        registered_groups.add(message.chat.id)
+
     text = (
         "👑 **Welcome to Rohit Chauhan's Music & Management Bot!** 👑\n\n"
         "🎵 **Music Commands:**\n"
         "• `/play <song>` - Audio Play with Rohit Chauhan Branding\n"
         "• `/vplay <song>` - Video Play\n"
-        "• `/skip` - Next Song\n"
+        "• `/skip` - Stop / Next Song\n"
         "• `/pose` - Pause playback\n"
         "• `/radumey` - Resume playback\n\n"
         "📢 **Tagging Commands:**\n"
@@ -122,10 +122,10 @@ async def sudo_handler(client, message):
         "• **Sudo Privileges:** Full Bot Access & Server Controls"
     )
     await message.reply_text(text, disable_web_page_preview=True)
-
-# --- PLAY & VIDEO PLAY ---
+    # --- PLAY & VIDEO PLAY ---
 @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
 async def play_handler(client, message):
+    registered_groups.add(message.chat.id)
     is_video = message.command[0].lower() == "vplay"
     if len(message.command) < 2:
         return await message.reply_text("Bhai gaane ka naam ya YouTube link do!")
@@ -144,7 +144,6 @@ async def play_handler(client, message):
         except Exception as e:
             return await m.edit(f"❌ Error: {e}")
 
-    # Fetch thumbnail and apply Rohit Chauhan watermark
     caption = (
         f"👑 **रोहित चौहान Music Bot**\n\n"
         f"▶️ **Now Playing:** `{title}`\n"
@@ -202,17 +201,16 @@ async def stop_handler(client, message):
         await message.reply_text("⏹️ **Gaana Stop/Skip kar diya gaya hai.**")
     except Exception as e:
         await message.reply_text(f"Error: {e}")
-
-# --- TAGGING SYSTEM ---
+    # --- TAGGING SYSTEM ---
 @bot.on_message(filters.command(["tagall", "tag", "vctag"]) & filters.group)
 async def tag_handler(client, message):
+    registered_groups.add(message.chat.id)
     cmd = message.command[0].lower()
     chat_id = message.chat.id
 
     if chat_id in active_tags:
         return await message.reply_text("⚠️ Pehle se hi ek tagging chal rahi hai! Rokane ke liye `/cancel` likhein.")
 
-    # Custom or random message
     if len(message.command) > 1:
         custom_text = " ".join(message.command[1:])
     else:
@@ -222,15 +220,14 @@ async def tag_handler(client, message):
             custom_text = random.choice(RANDOM_TAG_MESSAGES)
 
     active_tags[chat_id] = True
-    await message.reply_text(f"🚀 Tagging shuru ho gayi hai...")
+    await message.reply_text("🚀 Tagging shuru ho gayi hai...")
 
     members = []
     async for m in client.get_chat_members(chat_id):
         if not m.user.is_bot and not m.user.is_deleted:
             members.append(m.user)
 
-    if cmd == "tagall" or cmd == "vctag":
-        # 5-5 ke groups me tag
+    if cmd in ["tagall", "vctag"]:
         for i in range(0, len(members), 5):
             if chat_id not in active_tags:
                 break
@@ -239,7 +236,6 @@ async def tag_handler(client, message):
             await client.send_message(chat_id, f"📢 {custom_text}\n\n{mentions}")
             await asyncio.sleep(2.5)
     else:
-        # Single single tag
         for u in members:
             if chat_id not in active_tags:
                 break
@@ -260,15 +256,17 @@ async def cancel_handler(client, message):
 
 # --- PUZZLE / QUIZ HOURLY TASK ---
 PUZZLES = [
-    {"q": "इस तस्वीर में छुपा कोड क्या है: [ R O H I T ]", "opts": ["ROHIT", "MOHIT", "VIKAS", "AJAY"], "ans": "ROHIT"},
-    {"q": "Group ka Super Boss kaun hai?", "opts": ["रोहित चौहान", "Koi Aur", "Bot", "Admin"], "ans": "रोहित चौहान"},
-    {"q": "10 + 20 × 2 kitna hota hai?", "opts": ["50", "60", "40", "30"], "ans": "50"},
+    {"q": "Puzzle: Is box me kaunsa naam likha hai?\n\n[ R O H I T ]", "opts": ["ROHIT", "MOHIT", "VIKAS", "AJAY"], "ans": "ROHIT"},
+    {"q": "Group ka Asli Boss kaun hai?", "opts": ["रोहित चौहान", "Koi Aur", "Bot", "Admin"], "ans": "रोहित चौहान"},
+    {"q": "Fast Math: 10 + 20 × 2 kitna hota hai?", "opts": ["50", "60", "40", "30"], "ans": "50"},
 ]
 
 async def hourly_puzzle_loop():
     while True:
-        await asyncio.sleep(3600)  # Har 1 ghante baad
-        # Select puzzle
+        await asyncio.sleep(3600)
+        if not registered_groups:
+            continue
+
         p = random.choice(PUZZLES)
         buttons = []
         row = []
@@ -281,7 +279,7 @@ async def hourly_puzzle_loop():
         if row:
             buttons.append(row)
 
-        for chat_id in list(active_tags.keys()):
+        for chat_id in list(registered_groups):
             try:
                 await bot.send_message(
                     chat_id,
@@ -313,4 +311,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-  
+            
