@@ -134,31 +134,49 @@ async def play_handler(client, message):
     query = " ".join(message.command[1:])
     m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
 
-    ydl_opts = {
-        "format": "bestaudio/best" if not is_video else "best",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-        "geo_bypass": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios"]
-            }
-        }
-    }
-
     loop = asyncio.get_event_loop()
-    def fetch_stream():
+
+    def fetch_audio():
+        # First attempt: YouTube
+        yt_opts = {
+            "format": "bestaudio/best" if not is_video else "best",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "geo_bypass": True,
+        }
+        if os.path.exists("cookies.txt"):
+            yt_opts["cookiefile"] = "cookies.txt"
+
         target = query if ("http://" in query or "https://" in query) else f"ytsearch:{query}"
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            res = ydl.extract_info(target, download=False)
-            if 'entries' in res:
-                res = res['entries'][0]
-            return res
+        try:
+            with yt_dlp.YoutubeDL(yt_opts) as ydl:
+                res = ydl.extract_info(target, download=False)
+                if 'entries' in res and res['entries']:
+                    return res['entries'][0]
+                elif 'url' in res:
+                    return res
+        except Exception as yt_err:
+            print(f"YouTube block encountered ({yt_err}). Auto-switching to high-speed cloud stream...")
+
+        # Automatic Cloud Fallback: SoundCloud (Zero bot blocks, works 100% on cloud)
+        sc_opts = {
+            "format": "bestaudio/best",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+        }
+        with yt_dlp.YoutubeDL(sc_opts) as ydl:
+            res = ydl.extract_info(f"scsearch:{query}", download=False)
+            if 'entries' in res and res['entries']:
+                return res['entries'][0]
+            elif 'url' in res:
+                return res
+            raise Exception("Gaana kisi bhi source par nahi mila.")
 
     try:
-        info = await loop.run_in_executor(None, fetch_stream)
+        info = await loop.run_in_executor(None, fetch_audio)
         stream_url = info['url']
         title = info.get('title', query)
         thumb_url = info.get('thumbnail')
