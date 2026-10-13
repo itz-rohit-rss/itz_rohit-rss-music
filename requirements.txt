@@ -1,7 +1,7 @@
-pyrogram==2.0.106
-TgCrypto
-py-tgcalls==2.2.0
+pyrogram
+tgcrypto
+pytgcalls==2.2.0
 yt-dlp
-Pillow
 aiohttp
-aiofiles
+pillow
+static-ffmpeg
