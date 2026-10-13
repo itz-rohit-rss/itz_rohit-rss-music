@@ -19,15 +19,11 @@ STRING_SESSION = os.environ.get("STRING_SESSION")
 OWNER_ID = int(os.environ.get("OWNER_ID", "7885190981"))
 SUDO_USERS = [OWNER_ID]
 
-# Railway environment variable se cookies.txt file likhna
 COOKIE_FILE = "cookies.txt"
 yt_cookie_env = os.environ.get("YT_COOKIES")
 if yt_cookie_env:
     with open(COOKIE_FILE, "w", encoding="utf-8") as f:
         f.write(yt_cookie_env.strip())
-    print("✅ cookies.txt successfully written from YT_COOKIES variable!")
-else:
-    print("⚠️ YT_COOKIES environment variable not found!")
 
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
@@ -152,6 +148,11 @@ async def play_handler(client, message):
         "nocheckcertificate": True,
         "geo_bypass": True,
         "source_address": "0.0.0.0",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["tv", "mweb", "android"]
+            }
+        }
     }
 
     if os.path.exists(COOKIE_FILE):
