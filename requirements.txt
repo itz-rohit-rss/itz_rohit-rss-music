@@ -4,3 +4,4 @@ py-tgcalls==2.2.0
 yt-dlp
 aiohttp
 pillow
+static-ffmpeg
