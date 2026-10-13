@@ -3,6 +3,7 @@ import io
 import random
 import asyncio
 from pyrogram import Client, filters
+from pyrogram.enums import ChatType
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
@@ -36,7 +37,6 @@ RANDOM_TAG_MESSAGES = [
 ]
 
 def add_watermark(image_bytes: bytes) -> io.BytesIO:
-    """Adds a bold branded watermark bar on the song thumbnail"""
     try:
         image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         width, height = image.size
@@ -75,10 +75,10 @@ def add_watermark(image_bytes: bytes) -> io.BytesIO:
         print(f"Watermark error: {e}")
         return io.BytesIO(image_bytes)
 
-# --- START & INFO COMMANDS ---
+# --- START & INFO COMMANDS (WORKS IN BOTH DM & GROUPS) ---
 @bot.on_message(filters.command(["start", "help"]))
 async def start_handler(client, message):
-    if message.chat.type.value in ["group", "supergroup"]:
+    if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         registered_groups.add(message.chat.id)
 
     text = (
@@ -108,7 +108,7 @@ async def start_handler(client, message):
 async def owner_handler(client, message):
     text = (
         "👑 **Owner Information:**\n\n"
-        "👤 **Name:** रोहित चौहान\n"
+        "👤 **Name:** Rohit Chauhan (रोहित चौहान)\n"
         "🔗 **Telegram:** [@itz_rohit_rss](https://t.me/itz_rohit_rss)\n"
         "✨ **Status:** Asli Maalik & Jalwa Creator 🔥"
     )
@@ -302,9 +302,13 @@ async def puzzle_callback(client, callback_query: CallbackQuery):
 
 # --- BOT LAUNCH ---
 async def main():
-    await user.start()
-    await call_py.start()
     await bot.start()
+    await user.start()
+    try:
+        await call_py.start()
+    except Exception as e:
+        print(f"PyTgCalls startup note: {e}")
+
     print("🔥 Rohit Chauhan's Custom Bot is LIVE & Dominating! 🔥")
     asyncio.create_task(hourly_puzzle_loop())
     await asyncio.Event().wait()
