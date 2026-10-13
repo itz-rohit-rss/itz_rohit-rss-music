@@ -19,12 +19,6 @@ STRING_SESSION = os.environ.get("STRING_SESSION")
 OWNER_ID = int(os.environ.get("OWNER_ID", "7885190981"))
 SUDO_USERS = [OWNER_ID]
 
-COOKIE_FILE = "cookies.txt"
-yt_cookie_env = os.environ.get("YT_COOKIES")
-if yt_cookie_env:
-    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-        f.write(yt_cookie_env.strip())
-
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
 call_py = PyTgCalls(user)
@@ -147,27 +141,28 @@ async def play_handler(client, message):
         "no_warnings": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
-        "source_address": "0.0.0.0",
         "extractor_args": {
             "youtube": {
-                "player_client": ["tv", "mweb", "android"]
+                "player_client": ["android", "ios"]
             }
         }
     }
 
-    if os.path.exists(COOKIE_FILE):
-        ydl_opts["cookiefile"] = COOKIE_FILE
+    loop = asyncio.get_event_loop()
+    def fetch_stream():
+        target = query if ("http://" in query or "https://" in query) else f"ytsearch:{query}"
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            res = ydl.extract_info(target, download=False)
+            if 'entries' in res:
+                res = res['entries'][0]
+            return res
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            target = query if ("http://" in query or "https://" in query) else f"ytsearch:{query}"
-            info = ydl.extract_info(target, download=False)
-            if 'entries' in info:
-                info = info['entries'][0]
-            stream_url = info['url']
-            title = info.get('title', query)
-            thumb_url = info.get('thumbnail')
-            duration = info.get('duration_string', 'Unknown')
+        info = await loop.run_in_executor(None, fetch_stream)
+        stream_url = info['url']
+        title = info.get('title', query)
+        thumb_url = info.get('thumbnail')
+        duration = info.get('duration_string', 'Unknown')
     except Exception as e:
         return await m.edit(f"❌ Error: {e}")
 
