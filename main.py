@@ -134,17 +134,17 @@ async def play_handler(client, message):
     query = " ".join(message.command[1:])
     m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
 
+    cookie_file = "cookies.txt" if os.path.exists("cookies.txt") else None
+
     ydl_opts = {
         "format": "bestaudio/best" if not is_video else "best",
         "noplaylist": True,
         "quiet": True,
         "nocheckcertificate": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios"]
-            }
-        }
     }
+    if cookie_file:
+        ydl_opts["cookiefile"] = cookie_file
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
