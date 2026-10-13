@@ -20,7 +20,7 @@ OWNER_ID = int(os.environ.get("OWNER_ID", "7885190981"))
 SUDO_USERS = [OWNER_ID]
 
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
+user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION, takeout=False)
 call_py = PyTgCalls(user)
 
 # Active Trackers & Storage
@@ -75,7 +75,7 @@ def add_watermark(image_bytes: bytes) -> io.BytesIO:
         print(f"Watermark error: {e}")
         return io.BytesIO(image_bytes)
 
-# --- START & INFO COMMANDS (WORKS IN BOTH DM & GROUPS) ---
+# --- START & INFO COMMANDS ---
 @bot.on_message(filters.command(["start", "help"]))
 async def start_handler(client, message):
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
@@ -304,6 +304,14 @@ async def puzzle_callback(client, callback_query: CallbackQuery):
 async def main():
     await bot.start()
     await user.start()
+
+    # Pre-cache assistant chats to prevent ID not found errors
+    try:
+        async for dialog in user.get_dialogs(limit=100):
+            pass
+    except Exception as e:
+        print(f"Dialog sync note: {e}")
+
     try:
         await call_py.start()
     except Exception as e:
