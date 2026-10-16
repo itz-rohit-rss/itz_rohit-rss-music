@@ -143,14 +143,24 @@ async def stream_update_handler(client, update):
             except Exception as e:
                 print(f"Auto-leave error: {e}")
 
-# --- 4. HIGH-SPEED CLOUD STREAM FETCHER ---
-async def fetch_audio_stream(query: str):
-    is_link = query.startswith("http://") or query.startswith("https://")
+# --- 4. HIGH-SPEED LOCAL AUDIO DOWNLOADER ---
+async def fetch_local_audio(query: str, chat_id: int):
+    # Purane files clean karein
+    for f in glob.glob(f"downloads/{chat_id}.*"):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
     loop = asyncio.get_event_loop()
 
-    def extract_track():
+    def download_job():
+        is_link = query.startswith("http://") or query.startswith("https://")
+        sources = [query] if is_link else [f"scsearch1:{query}", f"ytsearch1:{query}"]
+
         ydl_opts = {
-            "format": "bestaudio/best/ba/b",
+            "format": "bestaudio/best",
+            "outtmpl": f"downloads/{chat_id}.%(ext)s",
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
@@ -160,12 +170,7 @@ async def fetch_audio_stream(query: str):
         if os.path.exists("cookies.txt"):
             ydl_opts["cookiefile"] = "cookies.txt"
 
-        if is_link:
-            search_targets = [query]
-        else:
-            search_targets = [f"scsearch1:{query}", f"ytsearch1:{query}"]
-
-        for target in search_targets:
+        for target in sources:
             try:
                 opts = dict(ydl_opts)
                 if "ytsearch" in target or "youtube.com" in target or "youtu.be" in target:
@@ -174,27 +179,27 @@ async def fetch_audio_stream(query: str):
                     }
 
                 with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(target, download=False)
+                    info = ydl.extract_info(target, download=True)
                     if 'entries' in info and info['entries']:
                         info = info['entries'][0]
 
-                    stream_url = info.get("url")
-                    if stream_url:
+                    files = glob.glob(f"downloads/{chat_id}.*")
+                    if files:
                         return {
-                            "stream_url": stream_url,
+                            "file_path": files[0],
                             "title": info.get("title", query),
                             "thumbnail": info.get("thumbnail"),
                             "duration": info.get("duration_string", "Unknown")
                         }
             except Exception as e:
-                print(f"Search error for {target}: {e}")
+                print(f"Download attempt failed for {target}: {e}")
                 continue
         return None
 
-    res = await loop.run_in_executor(None, extract_track)
+    res = await loop.run_in_executor(None, download_job)
     if res:
         return res
-    raise Exception("Gaana kisi bhi source par nahi mila. Kripya gaane ka doosra naam likhein ya direct link dein.")
+    raise Exception("Gaana kisi bhi platform par nahi mila. Kripya gaane ka sahi naam likhein ya direct link dein.")
 
 # --- 5. START & HELP HANDLERS ---
 @bot.on_message(filters.command(["start"]))
@@ -300,7 +305,7 @@ async def join_assistant_handler(client, message):
             return await m.edit("❌ **Bot ko invite link banane ki permission nahi hai.** Bot ko Admin banayein.")
 
         await user.join_chat(invite_link)
-        await m.edit("✅ **Assistant successfully group me join ho gaya hai!** Ab gaana chalane ke liye ready hai.")
+        await m.edit("✅ **Assistant successfully group me join ho gaya hai!**")
     except Exception as e:
         await m.edit(f"❌ Join error: {e}")
 
@@ -326,10 +331,10 @@ async def play_handler(client, message):
         return await message.reply_text("Bhai gaane ka naam do! Example: `/play radhe radhe barsane wali`")
 
     query = " ".join(message.command[1:])
-    m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
+    m = await message.reply_text(f"🔎 **Gaana khoj kar prepare kiya ja raha hai:** `{query}`...")
 
     try:
-        track = await fetch_audio_stream(query)
+        track = await fetch_local_audio(query, message.chat.id)
     except Exception as e:
         return await m.edit(f"❌ Error: {e}")
 
@@ -346,8 +351,12 @@ async def play_handler(client, message):
     ])
 
     try:
-        stream = MediaStream(track["stream_url"], video_flags=MediaStream.Flags.IGNORE if not is_video else None)
+        stream = MediaStream(track["file_path"], video_flags=MediaStream.Flags.IGNORE if not is_video else None)
         await call_py.play(message.chat.id, stream)
+        try:
+            await call_py.unmute_stream(message.chat.id)
+        except Exception:
+            pass
     except Exception as e:
         try:
             await call_py.leave_call(message.chat.id)
@@ -375,9 +384,16 @@ async def play_handler(client, message):
 async def stop_handler(client, message):
     try:
         await call_py.leave_call(message.chat.id)
-        await message.reply_text("⏹️ **Gaana stop kar diya aur Assistant VC se leave ho gaya!**")
-    except Exception as e:
-        await message.reply_text(f"Notice: {e}")
+    except Exception:
+        pass
+
+    for f in glob.glob(f"downloads/{message.chat.id}.*"):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
+    await message.reply_text("⏹️ **Gaana stop kar diya aur Assistant VC se leave ho gaya!**")
 
 @bot.on_message(filters.command("pose") & filters.group)
 async def pause_handler(client, message):
