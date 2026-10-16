@@ -15,10 +15,7 @@ import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
-# Ensure downloads folder exists
-os.makedirs("downloads", exist_ok=True)
-
-# --- 1. NIX & SYSTEM FFPROBE/FFMPEG PATH AUTO-LINK ---
+# --- 1. SYSTEM & NIX FFPROBE/FFMPEG AUTO-LINK ---
 nix_candidate_dirs = [
     "/root/.nix-profile/bin",
     "/nix/var/nix/profiles/default/bin",
@@ -32,6 +29,14 @@ for p in nix_candidate_dirs:
     if os.path.isdir(p) and p not in current_path:
         current_path = f"{p}:{current_path}"
 os.environ["PATH"] = current_path
+
+# Static FFmpeg fallback
+if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+    except Exception as e:
+        print(f"Static ffmpeg load note: {e}")
 
 print(f"🔍 FFmpeg Path detected: {shutil.which('ffmpeg')}")
 print(f"🔍 FFprobe Path detected: {shutil.which('ffprobe')}")
@@ -115,83 +120,59 @@ def get_start_markup(bot_username: str):
         ]
     ])
 
-# --- 3. HIGH-SPEED CLOUD AUDIO ENGINE ---
-async def fetch_audio_stream(query: str, chat_id: int):
-    # Purani files clean karein
-    for f in glob.glob(f"downloads/{chat_id}.*"):
-        try:
-            os.remove(f)
-        except Exception:
-            pass
-
+# --- 3. HIGH-SPEED CLOUD STREAM FETCHER ---
+async def fetch_audio_stream(query: str):
+    is_link = query.startswith("http://") or query.startswith("https://")
     loop = asyncio.get_event_loop()
 
-    def download_track():
-        # SoundCloud primary engine (Cloud platforms par 0 block)
+    def extract_track():
         ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": f"downloads/{chat_id}.%(ext)s",
+            "format": "bestaudio/best/ba/b",
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
             "geo_bypass": True,
         }
+        if os.path.exists("cookies.txt"):
+            ydl_opts["cookiefile"] = "cookies.txt"
 
-        # Step 1: SoundCloud search
-        try:
-            target = query if (query.startswith("http://") or query.startswith("https://")) else f"scsearch5:{query}"
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(target, download=True)
-                if 'entries' in info and info['entries']:
-                    info = info['entries'][0]
+        # Direct link vs Search sequence
+        if is_link:
+            search_targets = [query]
+        else:
+            search_targets = [f"scsearch1:{query}", f"ytsearch1:{query}"]
 
-                # Any downloaded format (.opus, .m4a, .mp3) pick karein
-                files = glob.glob(f"downloads/{chat_id}.*")
-                if files:
-                    return {
-                        "path": files[0],
-                        "title": info.get("title", query),
-                        "thumbnail": info.get("thumbnail"),
-                        "duration": info.get("duration_string", "Unknown")
+        for target in search_targets:
+            try:
+                opts = dict(ydl_opts)
+                if "ytsearch" in target or "youtube.com" in target or "youtu.be" in target:
+                    opts["extractor_args"] = {
+                        "youtube": {"player_client": ["android", "mweb", "web"]}
                     }
-        except Exception as e:
-            print(f"SoundCloud direct download failed: {e}")
 
-        # Step 2: YouTube fallback
-        try:
-            yt_opts = {
-                "format": "bestaudio/best",
-                "outtmpl": f"downloads/{chat_id}.%(ext)s",
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "nocheckcertificate": True,
-                "extractor_args": {"youtube": {"player_client": ["android", "ios"]}}
-            }
-            yt_target = query if (query.startswith("http://") or query.startswith("https://")) else f"ytsearch1:{query}"
-            with yt_dlp.YoutubeDL(yt_opts) as ydl:
-                info = ydl.extract_info(yt_target, download=True)
-                if 'entries' in info and info['entries']:
-                    info = info['entries'][0]
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(target, download=False)
+                    if 'entries' in info and info['entries']:
+                        info = info['entries'][0]
 
-                files = glob.glob(f"downloads/{chat_id}.*")
-                if files:
-                    return {
-                        "path": files[0],
-                        "title": info.get("title", query),
-                        "thumbnail": info.get("thumbnail"),
-                        "duration": info.get("duration_string", "Unknown")
-                    }
-        except Exception as e:
-            print(f"YouTube download failed: {e}")
-
+                    stream_url = info.get("url")
+                    if stream_url:
+                        return {
+                            "stream_url": stream_url,
+                            "title": info.get("title", query),
+                            "thumbnail": info.get("thumbnail"),
+                            "duration": info.get("duration_string", "Unknown")
+                        }
+            except Exception as e:
+                print(f"Search error for {target}: {e}")
+                continue
         return None
 
-    res = await loop.run_in_executor(None, download_track)
+    res = await loop.run_in_executor(None, extract_track)
     if res:
         return res
-    raise Exception("Gaana nahi mila. Kripya gaane ka sahi naam likhein ya direct link dein.")
+    raise Exception("Gaana kisi bhi source par nahi mila. Kripya gaane ka doosra naam likhein ya direct link dein.")
 
 # --- 4. START & HELP HANDLERS ---
 @bot.on_message(filters.command(["start"]))
@@ -226,7 +207,7 @@ async def bot_callbacks(client, callback_query: CallbackQuery):
             "🛠 **Music & Management Commands:**\n\n"
             "🎵 **Music Player:**\n"
             "• `/play <song>` - VC me high quality gaana chalaye\n"
-            "• `/stop` ya `/leave` - VC leave karein & gaana band karein\n"
+            "• `/stop` ya `/leavevc` - VC leave karein & gaana band karein\n"
             "• `/pose` - Pause stream\n"
             "• `/radumey` - Resume stream\n\n"
             "📢 **Tagging & Groups:**\n"
@@ -283,14 +264,15 @@ async def sudo_handler(client, message):
 @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
 async def play_handler(client, message):
     registered_groups.add(message.chat.id)
+    is_video = message.command[0].lower() == "vplay"
     if len(message.command) < 2:
-        return await message.reply_text("Bhai gaane ka naam do! Example: `/play radhe radhe barsane wali`")
+        return await message.reply_text("Bhai gaane ka naam do! Example: `/play shiv tandav`")
 
     query = " ".join(message.command[1:])
     m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
 
     try:
-        track = await fetch_audio_stream(query, message.chat.id)
+        track = await fetch_audio_stream(query)
     except Exception as e:
         return await m.edit(f"❌ Error: {e}")
 
@@ -307,9 +289,13 @@ async def play_handler(client, message):
     ])
 
     try:
-        stream = MediaStream(track["path"])
+        stream = MediaStream(track["stream_url"], video_flags=MediaStream.Flags.IGNORE if not is_video else None)
         await call_py.play(message.chat.id, stream)
     except Exception as e:
+        try:
+            await call_py.leave_call(message.chat.id)
+        except Exception:
+            pass
         return await m.edit(f"VC join error: {e}")
 
     await m.delete()
@@ -332,16 +318,9 @@ async def play_handler(client, message):
 async def stop_handler(client, message):
     try:
         await call_py.leave_call(message.chat.id)
-    except Exception:
-        pass
-
-    for f in glob.glob(f"downloads/{message.chat.id}.*"):
-        try:
-            os.remove(f)
-        except Exception:
-            pass
-
-    await message.reply_text("⏹️ **Gaana stop kar diya aur Assistant VC se leave ho gaya!**")
+        await message.reply_text("⏹️ **Gaana stop kar diya aur Assistant VC se leave ho gaya!**")
+    except Exception as e:
+        await message.reply_text(f"Notice: {e}")
 
 @bot.on_message(filters.command("pose") & filters.group)
 async def pause_handler(client, message):
