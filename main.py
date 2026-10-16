@@ -6,7 +6,6 @@ import time
 import shutil
 import random
 import asyncio
-import urllib.parse
 from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -16,7 +15,7 @@ import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
-# Ensure downloads directory exists
+# Ensure downloads folder exists
 os.makedirs("downloads", exist_ok=True)
 
 # --- 1. NIX & SYSTEM FFPROBE/FFMPEG PATH AUTO-LINK ---
@@ -28,16 +27,14 @@ nix_candidate_dirs = [
     "/bin"
 ] + glob.glob("/nix/store/*ffmpeg*/bin") + glob.glob("/nix/store/*ffprobe*/bin")
 
+current_path = os.environ.get("PATH", "")
 for p in nix_candidate_dirs:
-    if os.path.isdir(p) and p not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = f"{p}:{os.environ.get('PATH', '')}"
+    if os.path.isdir(p) and p not in current_path:
+        current_path = f"{p}:{current_path}"
+os.environ["PATH"] = current_path
 
-if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
-    try:
-        import static_ffmpeg
-        static_ffmpeg.add_paths()
-    except Exception as e:
-        print(f"Static ffmpeg load note: {e}")
+print(f"🔍 FFmpeg Path detected: {shutil.which('ffmpeg')}")
+print(f"🔍 FFprobe Path detected: {shutil.which('ffprobe')}")
 
 # --- 2. CONFIGS & CLIENT SETUP ---
 API_ID = int(os.environ.get("API_ID"))
@@ -47,10 +44,7 @@ STRING_SESSION = os.environ.get("STRING_SESSION")
 OWNER_ID = int(os.environ.get("OWNER_ID", "7885190981"))
 SUDO_USERS = [OWNER_ID]
 
-START_IMG = os.environ.get(
-    "START_IMG",
-    "start.jpg" if os.path.exists("start.jpg") else "https://telegra.ph/file/0c9769399df3d854eb094.jpg"
-)
+START_IMG = "start.jpg" if os.path.exists("start.jpg") else "https://telegra.ph/file/0c9769399df3d854eb094.jpg"
 
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
@@ -121,96 +115,83 @@ def get_start_markup(bot_username: str):
         ]
     ])
 
-# --- 3. HIGH-SPEED AUDIO FETCHER (JioSaavn + yt-dlp) ---
-async def fetch_audio_file(query: str, chat_id: int):
-    local_path = f"downloads/{chat_id}.mp3"
-    if os.path.exists(local_path):
+# --- 3. HIGH-SPEED CLOUD AUDIO ENGINE ---
+async def fetch_audio_stream(query: str, chat_id: int):
+    # Purani files clean karein
+    for f in glob.glob(f"downloads/{chat_id}.*"):
         try:
-            os.remove(local_path)
+            os.remove(f)
         except Exception:
             pass
 
-    # Source 1: JioSaavn Cloud API (Zero blocks, instant 320kbps MP3)
-    try:
-        encoded_q = urllib.parse.quote(query)
-        jio_url = f"https://saavn.dev/api/search/songs?query={encoded_q}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(jio_url, timeout=7) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    results = data.get("data", {}).get("results", [])
-                    if results:
-                        song = results[0]
-                        title = song.get("name", query)
-                        duration = str(song.get("duration", "Unknown"))
-                        download_urls = song.get("downloadUrl", [])
-                        stream_link = download_urls[-1]["url"] if download_urls else None
-                        images = song.get("image", [])
-                        thumb_url = images[-1]["url"] if images else None
-
-                        if stream_link:
-                            async with session.get(stream_link, timeout=25) as dl_resp:
-                                if dl_resp.status == 200:
-                                    with open(local_path, "wb") as f:
-                                        f.write(await dl_resp.read())
-                                    return {
-                                        "title": title,
-                                        "file_path": local_path,
-                                        "thumbnail": thumb_url,
-                                        "duration": duration
-                                    }
-    except Exception as e:
-        print(f"JioSaavn fetch error: {e}")
-
-    # Source 2: yt-dlp Local Extraction (SoundCloud & YouTube Fallback)
     loop = asyncio.get_event_loop()
-    def download_with_ytdlp():
+
+    def download_track():
+        # SoundCloud primary engine (Cloud platforms par 0 block)
         ydl_opts = {
             "format": "bestaudio/best",
             "outtmpl": f"downloads/{chat_id}.%(ext)s",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
             "geo_bypass": True,
         }
-        if os.path.exists("cookies.txt"):
-            ydl_opts["cookiefile"] = "cookies.txt"
 
-        targets = [
-            f"scsearch1:{query}",
-            query if ("http://" in query or "https://" in query) else f"ytsearch1:{query}"
-        ]
+        # Step 1: SoundCloud search
+        try:
+            target = query if (query.startswith("http://") or query.startswith("https://")) else f"scsearch5:{query}"
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(target, download=True)
+                if 'entries' in info and info['entries']:
+                    info = info['entries'][0]
 
-        for target in targets:
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(target, download=True)
-                    if 'entries' in info and info['entries']:
-                        info = info['entries'][0]
-                    title = info.get('title', query)
-                    thumb_url = info.get('thumbnail')
-                    duration = info.get('duration_string', 'Unknown')
-                    if os.path.exists(local_path):
-                        return {
-                            "title": title,
-                            "file_path": local_path,
-                            "thumbnail": thumb_url,
-                            "duration": duration
-                        }
-            except Exception as err:
-                print(f"yt-dlp fallback error: {err}")
+                # Any downloaded format (.opus, .m4a, .mp3) pick karein
+                files = glob.glob(f"downloads/{chat_id}.*")
+                if files:
+                    return {
+                        "path": files[0],
+                        "title": info.get("title", query),
+                        "thumbnail": info.get("thumbnail"),
+                        "duration": info.get("duration_string", "Unknown")
+                    }
+        except Exception as e:
+            print(f"SoundCloud direct download failed: {e}")
+
+        # Step 2: YouTube fallback
+        try:
+            yt_opts = {
+                "format": "bestaudio/best",
+                "outtmpl": f"downloads/{chat_id}.%(ext)s",
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "nocheckcertificate": True,
+                "extractor_args": {"youtube": {"player_client": ["android", "ios"]}}
+            }
+            yt_target = query if (query.startswith("http://") or query.startswith("https://")) else f"ytsearch1:{query}"
+            with yt_dlp.YoutubeDL(yt_opts) as ydl:
+                info = ydl.extract_info(yt_target, download=True)
+                if 'entries' in info and info['entries']:
+                    info = info['entries'][0]
+
+                files = glob.glob(f"downloads/{chat_id}.*")
+                if files:
+                    return {
+                        "path": files[0],
+                        "title": info.get("title", query),
+                        "thumbnail": info.get("thumbnail"),
+                        "duration": info.get("duration_string", "Unknown")
+                    }
+        except Exception as e:
+            print(f"YouTube download failed: {e}")
+
         return None
 
-    res = await loop.run_in_executor(None, download_with_ytdlp)
+    res = await loop.run_in_executor(None, download_track)
     if res:
         return res
-    raise Exception("Gaana kisi bhi source par nahi mila.")
+    raise Exception("Gaana nahi mila. Kripya gaane ka sahi naam likhein ya direct link dein.")
 
 # --- 4. START & HELP HANDLERS ---
 @bot.on_message(filters.command(["start"]))
@@ -244,8 +225,8 @@ async def bot_callbacks(client, callback_query: CallbackQuery):
         help_text = (
             "🛠 **Music & Management Commands:**\n\n"
             "🎵 **Music Player:**\n"
-            "• `/play <song>` - VC me crystal clear gaana chalaye\n"
-            "• `/stop` ya `/leavevc` - VC leave karein & gaana band karein\n"
+            "• `/play <song>` - VC me high quality gaana chalaye\n"
+            "• `/stop` ya `/leave` - VC leave karein & gaana band karein\n"
             "• `/pose` - Pause stream\n"
             "• `/radumey` - Resume stream\n\n"
             "📢 **Tagging & Groups:**\n"
@@ -303,13 +284,13 @@ async def sudo_handler(client, message):
 async def play_handler(client, message):
     registered_groups.add(message.chat.id)
     if len(message.command) < 2:
-        return await message.reply_text("Bhai gaane ka naam do! Example: `/play shiv tandav`")
+        return await message.reply_text("Bhai gaane ka naam do! Example: `/play radhe radhe barsane wali`")
 
     query = " ".join(message.command[1:])
     m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
 
     try:
-        track = await fetch_audio_file(query, message.chat.id)
+        track = await fetch_audio_stream(query, message.chat.id)
     except Exception as e:
         return await m.edit(f"❌ Error: {e}")
 
@@ -326,7 +307,7 @@ async def play_handler(client, message):
     ])
 
     try:
-        stream = MediaStream(track["file_path"])
+        stream = MediaStream(track["path"])
         await call_py.play(message.chat.id, stream)
     except Exception as e:
         return await m.edit(f"VC join error: {e}")
@@ -354,10 +335,9 @@ async def stop_handler(client, message):
     except Exception:
         pass
 
-    local_path = f"downloads/{message.chat.id}.mp3"
-    if os.path.exists(local_path):
+    for f in glob.glob(f"downloads/{message.chat.id}.*"):
         try:
-            os.remove(local_path)
+            os.remove(f)
         except Exception:
             pass
 
