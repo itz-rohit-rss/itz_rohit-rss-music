@@ -15,6 +15,9 @@ import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
+# Ensure downloads directory exists
+os.makedirs("downloads", exist_ok=True)
+
 # --- 1. SYSTEM & NIX FFPROBE/FFMPEG AUTO-LINK ---
 nix_candidate_dirs = [
     "/root/.nix-profile/bin",
@@ -30,7 +33,6 @@ for p in nix_candidate_dirs:
         current_path = f"{p}:{current_path}"
 os.environ["PATH"] = current_path
 
-# Static FFmpeg fallback
 if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
     try:
         import static_ffmpeg
@@ -120,7 +122,28 @@ def get_start_markup(bot_username: str):
         ]
     ])
 
-# --- 3. HIGH-SPEED CLOUD STREAM FETCHER ---
+# --- 3. AUTO-LEAVE ON STREAM END ---
+@call_py.on_update()
+async def stream_update_handler(client, update):
+    update_type = type(update).__name__
+    if any(k in update_type for k in ["StreamAudioEnded", "StreamVideoEnded", "StreamEnded"]):
+        chat_id = getattr(update, "chat_id", None)
+        if chat_id:
+            try:
+                await client.leave_call(chat_id)
+                for f in glob.glob(f"downloads/{chat_id}.*"):
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
+                await bot.send_message(
+                    chat_id,
+                    "⏹️ **Gaana khatam ho gaya! Assistant ne VC successfully leave kar diya.**"
+                )
+            except Exception as e:
+                print(f"Auto-leave error: {e}")
+
+# --- 4. HIGH-SPEED CLOUD STREAM FETCHER ---
 async def fetch_audio_stream(query: str):
     is_link = query.startswith("http://") or query.startswith("https://")
     loop = asyncio.get_event_loop()
@@ -137,7 +160,6 @@ async def fetch_audio_stream(query: str):
         if os.path.exists("cookies.txt"):
             ydl_opts["cookiefile"] = "cookies.txt"
 
-        # Direct link vs Search sequence
         if is_link:
             search_targets = [query]
         else:
@@ -174,7 +196,7 @@ async def fetch_audio_stream(query: str):
         return res
     raise Exception("Gaana kisi bhi source par nahi mila. Kripya gaane ka doosra naam likhein ya direct link dein.")
 
-# --- 4. START & HELP HANDLERS ---
+# --- 5. START & HELP HANDLERS ---
 @bot.on_message(filters.command(["start"]))
 async def start_handler(client, message):
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
@@ -204,12 +226,15 @@ async def bot_callbacks(client, callback_query: CallbackQuery):
 
     if data == "bot_help":
         help_text = (
-            "🛠 **Music & Management Commands:**\n\n"
+            "🛠 **Commands List:**\n\n"
             "🎵 **Music Player:**\n"
             "• `/play <song>` - VC me high quality gaana chalaye\n"
             "• `/stop` ya `/leavevc` - VC leave karein & gaana band karein\n"
-            "• `/pose` - Pause stream\n"
-            "• `/radumey` - Resume stream\n\n"
+            "• `/pose` - Pause playback\n"
+            "• `/radumey` - Resume playback\n\n"
+            "🤖 **Assistant Management:**\n"
+            "• `/userbotjoin` - Assistant ko group me invite/join karayein\n"
+            "• `/userbotleave` - Assistant ko group se leave karayein\n\n"
             "📢 **Tagging & Groups:**\n"
             "• `/tagall <text>` - Sabhi ko 5-5 ke batch me tag karein\n"
             "• `/tag <text>` - Single-single members mention\n"
@@ -260,13 +285,45 @@ async def sudo_handler(client, message):
     )
     await message.reply_text(text, disable_web_page_preview=True)
 
-# --- 5. PLAY & VC CONTROLS ---
+# --- 6. ASSISTANT JOIN / LEAVE COMMANDS ---
+@bot.on_message(filters.command(["userbotjoin", "joinassistant"]) & filters.group)
+async def join_assistant_handler(client, message):
+    chat_id = message.chat.id
+    m = await message.reply_text("⏳ **Assistant ko group me join karaya ja raha hai...**")
+    try:
+        try:
+            invite_link = await client.export_chat_invite_link(chat_id)
+        except Exception:
+            invite_link = (await client.get_chat(chat_id)).invite_link
+
+        if not invite_link:
+            return await m.edit("❌ **Bot ko invite link banane ki permission nahi hai.** Bot ko Admin banayein.")
+
+        await user.join_chat(invite_link)
+        await m.edit("✅ **Assistant successfully group me join ho gaya hai!** Ab gaana chalane ke liye ready hai.")
+    except Exception as e:
+        await m.edit(f"❌ Join error: {e}")
+
+@bot.on_message(filters.command(["userbotleave", "leaveassistant"]) & filters.group)
+async def leave_assistant_handler(client, message):
+    chat_id = message.chat.id
+    try:
+        try:
+            await call_py.leave_call(chat_id)
+        except Exception:
+            pass
+        await user.leave_chat(chat_id)
+        await message.reply_text("👋 **Assistant ne group successfully leave kar diya!**")
+    except Exception as e:
+        await message.reply_text(f"❌ Leave error: {e}")
+
+# --- 7. PLAY & VC CONTROLS ---
 @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
 async def play_handler(client, message):
     registered_groups.add(message.chat.id)
     is_video = message.command[0].lower() == "vplay"
     if len(message.command) < 2:
-        return await message.reply_text("Bhai gaane ka naam do! Example: `/play shiv tandav`")
+        return await message.reply_text("Bhai gaane ka naam do! Example: `/play radhe radhe barsane wali`")
 
     query = " ".join(message.command[1:])
     m = await message.reply_text(f"🔎 **Khoj jaari hai:** `{query}`...")
@@ -338,7 +395,7 @@ async def resume_handler(client, message):
     except Exception as e:
         await message.reply_text(f"Error: {e}")
 
-# --- 6. TAGGING SYSTEM ---
+# --- 8. TAGGING SYSTEM ---
 @bot.on_message(filters.command(["tagall", "tag", "vctag"]) & filters.group)
 async def tag_handler(client, message):
     registered_groups.add(message.chat.id)
@@ -391,7 +448,7 @@ async def cancel_handler(client, message):
     else:
         await message.reply_text("Koi active tagging nahi chal rahi thi.")
 
-# --- 7. PUZZLE / QUIZ HOURLY TASK ---
+# --- 9. PUZZLE / QUIZ HOURLY TASK ---
 PUZZLES = [
     {"q": "Puzzle: Is box me kaunsa naam likha hai?\n\n[ R O H I T ]", "opts": ["ROHIT", "MOHIT", "VIKAS", "AJAY"], "ans": "ROHIT"},
     {"q": "Group ka Asli Boss kaun hai?", "opts": ["रोहित चौहान", "Koi Aur", "Bot", "Admin"], "ans": "रोहित चौहान"},
@@ -437,7 +494,7 @@ async def puzzle_callback(client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
 
-# --- 8. BOT LAUNCH ---
+# --- 10. BOT LAUNCH ---
 async def start_services():
     await bot.start()
     await user.start()
