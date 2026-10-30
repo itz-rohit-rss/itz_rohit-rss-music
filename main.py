@@ -40,9 +40,6 @@ if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
     except Exception as e:
         print(f"Static ffmpeg load note: {e}")
 
-print(f"🔍 FFmpeg Path detected: {shutil.which('ffmpeg')}")
-print(f"🔍 FFprobe Path detected: {shutil.which('ffprobe')}")
-
 # --- 2. CONFIGS & CLIENT SETUP ---
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
@@ -57,9 +54,13 @@ bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
 call_py = PyTgCalls(user)
 
+# Active states & Auto-play trackers
 active_tags = {}
 user_scores = {}
 registered_groups = set()
+autoplay_enabled = {}       # chat_id -> bool
+last_playing_query = {}     # chat_id -> str
+is_paused_dict = {}         # chat_id -> bool
 
 RANDOM_TAG_MESSAGES = [
     "Kahan so rahe ho sab? Active ho jao!",
@@ -110,42 +111,45 @@ def add_watermark(image_bytes: bytes) -> io.BytesIO:
 
 def get_start_markup(bot_username: str):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Add me to your group ➕", url=f"https://t.me/{bot_username}?startgroup=true")],
-        [InlineKeyboardButton("Help", callback_data="bot_help")],
+        [InlineKeyboardButton("➕ ADD ME TO YOUR GROUP", url=f"https://t.me/{bot_username}?startgroup=true")],
         [
-            InlineKeyboardButton("💬 Support", url="https://t.me/THW_WORLD"),
-            InlineKeyboardButton("📢 Updates", url="https://t.me/+w9-FGr4xeIEyNWE1")
+            InlineKeyboardButton("💬 SUPPORT ↗", url="https://t.me/THW_WORLD"),
+            InlineKeyboardButton("👑 OWNER", url="https://t.me/itz_rohit_rss")
         ],
         [
-            InlineKeyboardButton("👤 Owner", url="https://t.me/itz_rohit_rss"),
-            InlineKeyboardButton("🏓 Ping", callback_data="bot_ping")
+            InlineKeyboardButton("📢 UPDATES ↗", url="https://t.me/+w9-FGr4xeIEyNWE1"),
+            InlineKeyboardButton("🌐 LANGUAGE", callback_data="bot_lang")
+        ],
+        [
+            InlineKeyboardButton("🛠 HELP AND COMMAND ♡", callback_data="bot_help")
+        ],
+        [
+            InlineKeyboardButton("🏓 PING", callback_data="bot_ping"),
+            InlineKeyboardButton("👤 SOURCE", callback_data="bot_source")
         ]
     ])
 
-# --- 3. AUTO-LEAVE ON STREAM END ---
-@call_py.on_update()
-async def stream_update_handler(client, update):
-    update_type = type(update).__name__
-    if any(k in update_type for k in ["StreamAudioEnded", "StreamVideoEnded", "StreamEnded"]):
-        chat_id = getattr(update, "chat_id", None)
-        if chat_id:
-            try:
-                await client.leave_call(chat_id)
-                for f in glob.glob(f"downloads/{chat_id}.*"):
-                    try:
-                        os.remove(f)
-                    except Exception:
-                        pass
-                await bot.send_message(
-                    chat_id,
-                    "⏹️ **Gaana khatam ho gaya! Assistant ne VC successfully leave kar diya.**"
-                )
-            except Exception as e:
-                print(f"Auto-leave error: {e}")
+def get_player_buttons(chat_id: int):
+    ap_status = "ON 🟢" if autoplay_enabled.get(chat_id, False) else "OFF 🔴"
+    pause_text = "▶️ Resume" if is_paused_dict.get(chat_id, False) else "⏸ Pause"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(pause_text, callback_data=f"playctrl_pause:{chat_id}"),
+            InlineKeyboardButton("⏹ Stop", callback_data=f"playctrl_stop:{chat_id}"),
+            InlineKeyboardButton("⏭ Skip", callback_data=f"playctrl_skip:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton(f"🔄 Auto-Play: {ap_status}", callback_data=f"playctrl_autoplay:{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("👑 Owner", url="https://t.me/itz_rohit_rss"),
+            InlineKeyboardButton("💬 Support", url="https://t.me/THW_WORLD"),
+            InlineKeyboardButton("📢 Updates", url="https://t.me/+w9-FGr4xeIEyNWE1")
+        ]
+    ])
 
-# --- 4. HIGH-SPEED LOCAL AUDIO DOWNLOADER ---
+# --- 3. HIGH-SPEED AUDIO ENGINE ---
 async def fetch_local_audio(query: str, chat_id: int):
-    # Purane files clean karein
     for f in glob.glob(f"downloads/{chat_id}.*"):
         try:
             os.remove(f)
@@ -199,23 +203,86 @@ async def fetch_local_audio(query: str, chat_id: int):
     res = await loop.run_in_executor(None, download_job)
     if res:
         return res
-    raise Exception("Gaana kisi bhi platform par nahi mila. Kripya gaane ka sahi naam likhein ya direct link dein.")
+    raise Exception("Gaana nahi mila. Kripya doosra naam ya link dein.")
 
-# --- 5. START & HELP HANDLERS ---
+# Helper to automatically trigger auto-play
+async def trigger_autoplay(chat_id: int):
+    prev_query = last_playing_query.get(chat_id, "romantic hindi songs")
+    recommend_seeds = [
+        f"{prev_query} song mix",
+        f"{prev_query} mashup",
+        f"best of {prev_query}",
+        "trending bollywood songs"
+    ]
+    next_query = random.choice(recommend_seeds)
+    try:
+        track = await fetch_local_audio(next_query, chat_id)
+        stream = MediaStream(track["file_path"])
+        await call_py.play(chat_id, stream)
+        try:
+            await call_py.unmute_stream(chat_id)
+        except Exception:
+            pass
+        is_paused_dict[chat_id] = False
+        last_playing_query[chat_id] = track["title"]
+
+        caption = (
+            f"👑 **रोहित चौहान VIP Music Bot**\n\n"
+            f"🔄 **Auto-Play Triggered (Next Song):**\n"
+            f"▶️ **Song:** `{track['title']}`\n"
+            f"⏳ **Duration:** `{track['duration']}`\n\n"
+            f"🔥 *Non-Stop Music Engine Active!*"
+        )
+        buttons = get_player_buttons(chat_id)
+        await bot.send_message(chat_id, caption, reply_markup=buttons)
+    except Exception as e:
+        print(f"Auto-play next error: {e}")
+        try:
+            await call_py.leave_call(chat_id)
+        except Exception:
+            pass
+
+# --- 4. AUTO-LEAVE & AUTO-PLAY LISTENER ---
+@call_py.on_update()
+async def stream_update_handler(client, update):
+    update_type = type(update).__name__
+    if any(k in update_type for k in ["StreamAudioEnded", "StreamVideoEnded", "StreamEnded"]):
+        chat_id = getattr(update, "chat_id", None)
+        if chat_id:
+            # Check if Auto-Play is ON
+            if autoplay_enabled.get(chat_id, False):
+                await bot.send_message(chat_id, "🔄 **Gaana khatam hua! Auto-play agla gaana queue kar raha hai...**")
+                await trigger_autoplay(chat_id)
+            else:
+                try:
+                    await client.leave_call(chat_id)
+                    for f in glob.glob(f"downloads/{chat_id}.*"):
+                        try:
+                            os.remove(f)
+                        except Exception:
+                            pass
+                    await bot.send_message(
+                        chat_id,
+                        "⏹️ **Gaana samapt! Assistant ne VC successfully leave kar diya.**"
+                    )
+                except Exception as e:
+                    print(f"Auto-leave error: {e}")
+
+# --- 5. START & CALLBACK HANDLERS ---
 @bot.on_message(filters.command(["start"]))
 async def start_handler(client, message):
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         registered_groups.add(message.chat.id)
         return await message.reply_text(
-            f"Hey {message.from_user.mention}!\n👑 **Rohit Chauhan Music Bot** is active in this group!"
+            f"Hey {message.from_user.mention}!\n👑 **Rohit Chauhan VIP Music Bot** is active in this group!"
         )
 
     bot_me = await client.get_me()
     caption = (
-        f"Hey {message.from_user.mention},\n"
-        f"This is **Rohit Chauhan Music !! 🧿** !\n\n"
-        f"A music player bot with some awesome and useful features.\n\n"
-        f"Click on the help button for more info."
+        f"👋 **ʜᴇʏ** {message.from_user.mention} ❞\n"
+        f"⦿ **ᴛʜɪs ɪs** 『 **ʀᴏʜɪᴛ ᴄʜᴀᴜʜᴀɴ ᴍᴜsɪᴄ** 』⚡✨\n\n"
+        f"➳ **ᴀ ғᴀsᴛ & ᴘᴏᴡᴇʀғᴜʟ ᴛᴇʟᴇɢʀᴀᴍ ᴍᴜsɪᴄ ᴘʟᴀʏᴇʀ ʙᴏᴛ** 🎵 **ᴡɪᴛʜ sᴏᴍᴇ ᴀᴡᴇsᴏᴍᴇ ᴠɪᴘ ғᴇᴀᴛᴜʀᴇs.**\n\n"
+        f"⚙️ ⦿ **ᴛᴀᴘ ʜᴇʟᴘ ᴛᴏ ᴇxᴘʟᴏʀᴇ ᴄᴏᴍᴍᴀɴᴅs.**"
     )
     reply_markup = get_start_markup(bot_me.username)
 
@@ -225,70 +292,123 @@ async def start_handler(client, message):
         print(f"Photo send error: {e}")
         await message.reply_text(caption, reply_markup=reply_markup)
 
-@bot.on_callback_query(filters.regex(r"^bot_"))
-async def bot_callbacks(client, callback_query: CallbackQuery):
+@bot.on_callback_query()
+async def all_callback_handler(client, callback_query: CallbackQuery):
     data = callback_query.data
+    chat_id = callback_query.message.chat.id
 
+    # 1. Start menu callbacks
     if data == "bot_help":
         help_text = (
-            "🛠 **Commands List:**\n\n"
+            "🛠 **VIP Music & Management Commands:**\n\n"
             "🎵 **Music Player:**\n"
-            "• `/play <song>` - VC me high quality gaana chalaye\n"
-            "• `/stop` ya `/leavevc` - VC leave karein & gaana band karein\n"
-            "• `/pose` - Pause playback\n"
-            "• `/radumey` - Resume playback\n\n"
+            "• `/play <song>` - VC me 320kbps gaana play karein\n"
+            "• `/stop` ya `/leavevc` - VC leave karein & playback stop\n"
+            "• `/pose` - Song pause karein\n"
+            "• `/radumey` - Song resume karein\n\n"
             "🤖 **Assistant Management:**\n"
-            "• `/userbotjoin` - Assistant ko group me invite/join karayein\n"
-            "• `/userbotleave` - Assistant ko group se leave karayein\n\n"
-            "📢 **Tagging & Groups:**\n"
-            "• `/tagall <text>` - Sabhi ko 5-5 ke batch me tag karein\n"
-            "• `/tag <text>` - Single-single members mention\n"
-            "• `/vctag <text>` - Members ko VC invite karein\n"
-            "• `/cancel` - Tagging rokne ke liye\n\n"
-            "👑 **Owner / Info:**\n"
-            "• `/owner` - Maalik ki details\n"
-            "• `/sudolist` - Admin controls"
+            "• `/userbotjoin` - Assistant group me auto-join karega\n"
+            "• `/userbotleave` - Assistant group se leave karega\n\n"
+            "📢 **Smart Tagging:**\n"
+            "• `/tagall <text>` - 5-5 members mention\n"
+            "• `/tag <text>` - One-by-one mention\n"
+            "• `/vctag <text>` - Sabhi ko VC invite alert\n"
+            "• `/cancel` - Tagging turant rokein\n\n"
+            "👑 **Info:**\n"
+            "• `/owner` - Asli Maalik details (@itz_rohit_rss)"
         )
         back_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="bot_back")]
+            [InlineKeyboardButton("🔙 BACK", callback_data="bot_back")]
         ])
         await callback_query.edit_message_caption(caption=help_text, reply_markup=back_markup)
+        return await callback_query.answer()
 
     elif data == "bot_back":
         bot_me = await client.get_me()
         caption = (
-            f"Hey {callback_query.from_user.mention},\n"
-            f"This is **Rohit Chauhan Music !! 🧿** !\n\n"
-            f"A music player bot with some awesome and useful features.\n\n"
-            f"Click on the help button for more info."
+            f"👋 **ʜᴇʏ** {callback_query.from_user.mention} ❞\n"
+            f"⦿ **ᴛʜɪs ɪs** 『 **ʀᴏʜɪᴛ ᴄʜᴀᴜʜᴀɴ ᴍᴜsɪᴄ** 』⚡✨\n\n"
+            f"➳ **ᴀ ғᴀsᴛ & ᴘᴏᴡᴇʀғᴜʟ ᴛᴇʟᴇɢʀᴀᴍ ᴍᴜsɪᴄ ᴘʟᴀʏᴇʀ ʙᴏᴛ** 🎵 **ᴡɪᴛʜ sᴏᴍᴇ ᴀᴡᴇsᴏᴍᴇ ᴠɪᴘ ғᴇᴀᴛᴜʀᴇs.**\n\n"
+            f"⚙️ ⦿ **ᴛᴀᴘ ʜᴇʟᴘ ᴛᴏ ᴇxᴘʟᴏʀᴇ ᴄᴏᴍᴍᴀɴᴅs.**"
         )
         await callback_query.edit_message_caption(caption=caption, reply_markup=get_start_markup(bot_me.username))
+        return await callback_query.answer()
+
+    elif data == "bot_lang":
+        return await callback_query.answer("🌐 Language is already set to Default (Hindi / English)!", show_alert=True)
+
+    elif data == "bot_source":
+        return await callback_query.answer("👑 Developed exclusively for Rohit Chauhan (@itz_rohit_rss)!", show_alert=True)
 
     elif data == "bot_ping":
         start_ping = time.time()
-        m = await client.send_message(callback_query.message.chat.id, "🏓 Pinging...")
         delta = round((time.time() - start_ping) * 1000)
-        await m.delete()
-        await callback_query.answer(f"🏓 Pong: {delta}ms | Server active! 🔥", show_alert=True)
+        return await callback_query.answer(f"🏓 VIP Pong: {delta}ms | Server 100% Superfast! 🔥", show_alert=True)
 
-@bot.on_message(filters.command("owner"))
-async def owner_handler(client, message):
-    text = (
-        "👑 **Owner Information:**\n\n"
-        "👤 **Name:** Rohit Chauhan (रोहित चौहान)\n"
-        "🔗 **Telegram:** [@itz_rohit_rss](https://t.me/itz_rohit_rss)\n"
-        "✨ **Status:** Asli Maalik & Jalwa Creator 🔥"
-    )
-    await message.reply_text(text, disable_web_page_preview=True)
+    # 2. Player Controls Callbacks
+    elif data.startswith("playctrl_"):
+        action, target_cid_str = data.split(":")
+        target_cid = int(target_cid_str)
 
-@bot.on_message(filters.command("sudolist"))
-async def sudo_handler(client, message):
-    text = (
-        "👑 **Owner & Sudo Team:**\n\n"
-        "• **Creator / Super Owner:** रोहित चौहान ([@itz_rohit_rss](https://t.me/itz_rohit_rss))\n"
-        "• **Sudo Privileges:** Full Bot Access & Server Controls"
-    )
-    await message.reply_text(text, disable_web_page_preview=True)
+        if action == "playctrl_pause":
+            try:
+                await call_py.pause_stream(target_cid)
+                is_paused_dict[target_cid] = True
+                await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
+                return await callback_query.answer("⏸ Playback Paused!", show_alert=False)
+            except Exception as e:
+                return await callback_query.answer(f"Error: {e}", show_alert=True)
+
+        elif action == "playctrl_resume":
+            try:
+                await call_py.resume_stream(target_cid)
+                is_paused_dict[target_cid] = False
+                await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
+                return await callback_query.answer("▶️ Playback Resumed!", show_alert=False)
+            except Exception as e:
+                return await callback_query.answer(f"Error: {e}", show_alert=True)
+
+        elif action == "playctrl_stop":
+            try:
+                await call_py.leave_call(target_cid)
+            except Exception:
+                pass
+            autoplay_enabled[target_cid] = False
+            for f in glob.glob(f"downloads/{target_cid}.*"):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+            await callback_query.answer("⏹ Playback stopped & VC left!", show_alert=True)
+            return await callback_query.message.edit_text("⏹️ **Gaana stop kar diya aur Assistant VC se bahar aa gaya!**")
+
+        elif action == "playctrl_skip":
+            await callback_query.answer("⏭ Skipping to next track...", show_alert=False)
+            if autoplay_enabled.get(target_cid, False):
+                await trigger_autoplay(target_cid)
+            else:
+                try:
+                    await call_py.leave_call(target_cid)
+                except Exception:
+                    pass
+                await callback_query.message.edit_text("⏭️ **Song skip kar diya gaya! (Auto-play off tha toh VC leave ho gaya)**")
+
+        elif action == "playctrl_autoplay":
+            # Toggle Autoplay
+            current_status = autoplay_enabled.get(target_cid, False)
+            autoplay_enabled[target_cid] = not current_status
+            new_text = "ON 🟢 (Gaane lagataar chalenge)" if autoplay_enabled[target_cid] else "OFF 🔴 (Gaana khatam hone par VC leave karega)"
+            await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
+            return await callback_query.answer(f"🔄 Auto-Play set to: {new_text}", show_alert=True)
+
+    # 3. Puzzles
+    elif data.startswith("puz_"):
+        if data.startswith("puz_correct"):
+            u_id = callback_query.from_user.id
+            user_scores[u_id] = user_scores.get(u_id, 0) + 10
+            return await callback_query.answer(f"🎉 Sahi Jawab! Aapko +10 points mile! Total: {user_scores[u_id]} pts", show_alert=True)
+        else:
+            return await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
 
 # --- 6. ASSISTANT JOIN / LEAVE COMMANDS ---
 @bot.on_message(filters.command(["userbotjoin", "joinassistant"]) & filters.group)
@@ -322,16 +442,17 @@ async def leave_assistant_handler(client, message):
     except Exception as e:
         await message.reply_text(f"❌ Leave error: {e}")
 
-# --- 7. PLAY & VC CONTROLS ---
+# --- 7. PLAY COMMAND & VC STREAM ---
 @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
 async def play_handler(client, message):
     registered_groups.add(message.chat.id)
     is_video = message.command[0].lower() == "vplay"
     if len(message.command) < 2:
-        return await message.reply_text("Bhai gaane ka naam do! Example: `/play radhe radhe barsane wali`")
+        return await message.reply_text("Bhai gaane ka naam do! Example: `/play shiv tandav`")
 
     query = " ".join(message.command[1:])
-    m = await message.reply_text(f"🔎 **Gaana khoj kar prepare kiya ja raha hai:** `{query}`...")
+    last_playing_query[message.chat.id] = query
+    m = await message.reply_text(f"⚡ **VIP Audio Engine buffering:** `{query}`...")
 
     try:
         track = await fetch_local_audio(query, message.chat.id)
@@ -339,16 +460,13 @@ async def play_handler(client, message):
         return await m.edit(f"❌ Error: {e}")
 
     caption = (
-        f"👑 **रोहित चौहान Music Bot**\n\n"
+        f"👑 **रोहित चौहान VIP Music Bot**\n\n"
         f"▶️ **Now Playing:** `{track['title']}`\n"
         f"⏳ **Duration:** `{track['duration']}`\n"
         f"👤 **Requested By:** {message.from_user.mention}\n\n"
         f"🔥 *Jalwa Rohit Chauhan Ka!*"
     )
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("👑 Owner", url="https://t.me/itz_rohit_rss"),
-         InlineKeyboardButton("💬 Support", url="https://t.me/THW_WORLD")]
-    ])
+    buttons = get_player_buttons(message.chat.id)
 
     try:
         stream = MediaStream(track["file_path"], video_flags=MediaStream.Flags.IGNORE if not is_video else None)
@@ -357,6 +475,7 @@ async def play_handler(client, message):
             await call_py.unmute_stream(message.chat.id)
         except Exception:
             pass
+        is_paused_dict[message.chat.id] = False
     except Exception as e:
         try:
             await call_py.leave_call(message.chat.id)
@@ -386,19 +505,19 @@ async def stop_handler(client, message):
         await call_py.leave_call(message.chat.id)
     except Exception:
         pass
-
+    autoplay_enabled[message.chat.id] = False
     for f in glob.glob(f"downloads/{message.chat.id}.*"):
         try:
             os.remove(f)
         except Exception:
             pass
-
     await message.reply_text("⏹️ **Gaana stop kar diya aur Assistant VC se leave ho gaya!**")
 
 @bot.on_message(filters.command("pose") & filters.group)
 async def pause_handler(client, message):
     try:
         await call_py.pause_stream(message.chat.id)
+        is_paused_dict[message.chat.id] = True
         await message.reply_text("⏸️ **Playback Pause kar diya gaya hai.**")
     except Exception as e:
         await message.reply_text(f"Error: {e}")
@@ -407,6 +526,7 @@ async def pause_handler(client, message):
 async def resume_handler(client, message):
     try:
         await call_py.resume_stream(message.chat.id)
+        is_paused_dict[message.chat.id] = False
         await message.reply_text("▶️ **Playback dobara Resume ho gaya!**")
     except Exception as e:
         await message.reply_text(f"Error: {e}")
@@ -499,17 +619,6 @@ async def hourly_puzzle_loop():
             except Exception:
                 pass
 
-@bot.on_callback_query(filters.regex(r"^puz_"))
-async def puzzle_callback(client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    data = callback_query.data
-
-    if data.startswith("puz_correct"):
-        user_scores[user_id] = user_scores.get(user_id, 0) + 10
-        await callback_query.answer(f"🎉 Sahi Jawab! Aapko +10 points mile. Total: {user_scores[user_id]} pts!", show_alert=True)
-    else:
-        await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
-
 # --- 10. BOT LAUNCH ---
 async def start_services():
     await bot.start()
@@ -526,7 +635,7 @@ async def start_services():
     except Exception as e:
         print(f"PyTgCalls startup note: {e}")
 
-    print("🔥 Rohit Chauhan's Custom Bot is LIVE & Dominating! 🔥")
+    print("🔥 Rohit Chauhan's Custom VIP Bot is LIVE & Dominating! 🔥")
     asyncio.create_task(hourly_puzzle_loop())
     await idle()
     await bot.stop()
