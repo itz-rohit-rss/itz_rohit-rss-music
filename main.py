@@ -90,40 +90,45 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
-# --- SMART TEMPLATE DETECTOR ---
-def load_base_template():
-    # Priority 1: Common names
-    priority_names = [
+# --- ROBUST BASE TEMPLATE LOADER ---
+def get_base_poster():
+    # 1. Direct file check
+    search_files = [
         "template.jpg", "template.png", "template.jpeg",
-        "Template.jpg", "Template.png", "104707.png", "104707.jpg", "poster.jpg"
+        "Template.jpg", "Template.png", "1793969924167.png",
+        "104707.png", "104707.jpg"
     ]
-    for name in priority_names:
-        if os.path.exists(name):
+    for fn in search_files:
+        if os.path.isfile(fn):
             try:
-                img = Image.open(name).convert("RGB")
-                print(f"✅ Found template by direct name: {name}")
+                with open(fn, "rb") as f:
+                    img_bytes = f.read()
+                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                print(f"✅ Successfully loaded template from file: {fn} ({img.size})")
                 return img
             except Exception as e:
-                print(f"Error opening {name}: {e}")
+                print(f"Failed opening {fn}: {e}")
 
-    # Priority 2: Auto-scan all images in repo
-    for fname in os.listdir("."):
-        if fname.lower().endswith((".jpg", ".png", ".jpeg")) and fname.lower() not in ["start.jpg", "rohit_chauhan_vip.jpg"]:
+    # 2. Any image in root > 300KB (excluding start/downloaded ones)
+    for root_file in os.listdir("."):
+        if root_file.lower().endswith((".jpg", ".png", ".jpeg")) and not root_file.startswith("start"):
             try:
-                img = Image.open(fname).convert("RGB")
-                if img.size[0] >= 500 and img.size[1] >= 500:
-                    print(f"✅ Auto-detected template file in folder: {fname} (Size: {img.size})")
+                if os.path.getsize(root_file) > 100000: # greater than 100KB
+                    with open(root_file, "rb") as f:
+                        img_bytes = f.read()
+                    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                    print(f"✅ Auto-detected large template image: {root_file} ({img.size})")
                     return img
             except Exception:
-                continue
+                pass
 
-    print("⚠️ No template file found in directory! Creating fallback canvas.")
-    return Image.new("RGB", (2048, 2048), color=(20, 20, 20))
+    print("⚠️ Warning: No template image could be loaded! Creating fallback canvas.")
+    return Image.new("RGB", (2048, 2048), color=(15, 15, 15))
 
 # --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
 def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
     try:
-        base_img = load_base_template()
+        base_img = get_base_poster()
         if base_img.size != (2048, 2048):
             base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
 
@@ -191,7 +196,7 @@ def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
             draw.text((cur_x, cur_y), line, fill=(255, 215, 0), font=font)
             cur_y += line_spacing
 
-        # Resize to sharp 1280x1280 for fast Telegram delivery
+        # Resize to 1280x1280 for fast Telegram delivery
         final_img = base_img.resize((1280, 1280), Image.Resampling.LANCZOS)
         out = io.BytesIO()
         final_img.save(out, format="JPEG", quality=88)
@@ -502,6 +507,15 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
             new_text = "ON 🟢" if autoplay_enabled[target_cid] else "OFF 🔴"
             await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
             return await callback_query.answer(f"🔄 Auto-Play: {new_text}", show_alert=True)
+
+    # Puzzles
+    elif data.startswith("puz_"):
+        if data.startswith("puz_correct"):
+            u_id = callback_query.from_user.id
+            user_scores[u_id] = user_scores.get(u_id, 0) + 10
+            return await callback_query.answer(f"🎉 Sahi Jawab! +10 points mile! Total: {user_scores[u_id]} pts", show_alert=True)
+        else:
+            return await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
 
 # --- 7. ASSISTANT JOIN / LEAVE COMMANDS ---
 @bot.on_message(filters.command(["userbotjoin", "joinassistant"]) & filters.group)
