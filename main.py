@@ -69,7 +69,6 @@ raw_owner = os.environ.get("OWNER_ID", "7885190981").replace('"', '').replace("'
 OWNER_ID = int(raw_owner) if raw_owner.isdigit() else 7885190981
 
 START_IMG = "start.jpg" if os.path.exists("start.jpg") else "https://telegra.ph/file/0c9769399df3d854eb094.jpg"
-TEMPLATE_PATH = "template.jpg"
 
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
@@ -91,46 +90,68 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
+# --- SMART TEMPLATE LOADER ---
+def load_base_template():
+    possible_names = [
+        "template.jpg", "template.png", "template.jpeg",
+        "Template.jpg", "Template.png", "TEMPLATE.JPG",
+        "104707.png", "104707.jpg", "104707_2.png", "poster.jpg"
+    ]
+    for name in possible_names:
+        if os.path.exists(name):
+            try:
+                img = Image.open(name).convert("RGB")
+                print(f"✅ Template successfully loaded from: {name}")
+                return img
+            except Exception as e:
+                print(f"Error loading {name}: {e}")
+
+    # Fallback to wildcard search in directory
+    for match in glob.glob("*template*.*") + glob.glob("*104707*.*"):
+        try:
+            img = Image.open(match).convert("RGB")
+            print(f"✅ Template loaded via pattern match: {match}")
+            return img
+        except Exception:
+            pass
+
+    print("⚠️ No template file found in directory! Creating default canvas.")
+    return Image.new("RGB", (2048, 2048), color=(20, 20, 20))
+
 # --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
 def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
     try:
-        if os.path.exists(TEMPLATE_PATH):
-            base_img = Image.open(TEMPLATE_PATH).convert("RGB")
-        else:
-            base_img = Image.new("RGB", (1024, 1024), color=(20, 20, 20))
+        base_img = load_base_template()
+        # Resize to standard 2048x2048 for uniform pixel precision
+        if base_img.size != (2048, 2048):
+            base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
 
-        width, height = base_img.size
+        w, h = base_img.size
 
-        # 1. Box 1 (Left Box - Thumbnail Picture)
-        left_box_x1 = int(width * 0.043)
-        left_box_y1 = int(height * 0.718)
-        left_box_x2 = int(width * 0.354)
-        left_box_y2 = int(height * 0.942)
-        box_w = left_box_x2 - left_box_x1
-        box_h = left_box_y2 - left_box_y1
+        # 1. Left Box (Thumbnail Frame: x: 95-705, y: 1490-1930)
+        lx1, ly1, lx2, ly2 = 95, 1490, 705, 1930
+        box_w = lx2 - lx1
+        box_h = ly2 - ly1
 
         if thumb_bytes:
             try:
                 song_thumb = Image.open(io.BytesIO(thumb_bytes)).convert("RGB")
                 song_thumb = song_thumb.resize((box_w, box_h), Image.Resampling.LANCZOS)
-                base_img.paste(song_thumb, (left_box_x1, left_box_y1))
+                base_img.paste(song_thumb, (lx1, ly1))
             except Exception as e:
                 print(f"Paste thumb error: {e}")
 
-        # 2. Box 2 (Right Box - Song Name Text)
-        right_box_x1 = int(width * 0.435)
-        right_box_y1 = int(height * 0.805)
-        right_box_x2 = int(width * 0.915)
-        right_box_y2 = int(height * 0.935)
-        text_w = right_box_x2 - right_box_x1
-        text_h = right_box_y2 - right_box_y1
+        # 2. Right Box (Song Name Frame: x: 880-1870, y: 1635-1925)
+        rx1, ry1, rx2, ry2 = 880, 1635, 1870, 1925
+        text_box_w = rx2 - rx1
+        text_box_h = ry2 - ry1
 
         draw = ImageDraw.Draw(base_img)
-        # Black backdrop inside right box for high contrast
-        draw.rectangle([(right_box_x1, right_box_y1), (right_box_x2, right_box_y2)], fill=(10, 10, 10, 240))
+        # Clean dark backdrop to cover previous placeholder text
+        draw.rectangle([(rx1, ry1), (rx2, ry2)], fill=(12, 4, 4))
 
-        # Font setup
-        font_size = max(int(text_h * 0.28), 16)
+        # Font setup (65px for crisp readability)
+        font_size = 65
         font = None
         for font_path in [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -147,28 +168,30 @@ def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
         if font is None:
             font = ImageFont.load_default()
 
-        # Wrap text nicely inside right box
-        clean_title = song_title.strip()
+        # Wrap song title into 2 clean lines
+        clean_title = song_title.replace(".mp3", "").strip()
         lines = textwrap.wrap(clean_title, width=22)
         if len(lines) > 2:
             lines = lines[:2]
             lines[1] = lines[1][:19] + "..."
 
-        total_lines_height = len(lines) * (font_size + 4)
-        current_y = right_box_y1 + (text_h - total_lines_height) // 2
+        line_spacing = 80
+        total_text_h = len(lines) * line_spacing
+        cur_y = ry1 + (text_box_h - total_text_h) // 2
 
         for line in lines:
             try:
                 bbox = draw.textbbox((0, 0), line, font=font)
-                line_w = bbox[2] - bbox[0]
+                lw = bbox[2] - bbox[0]
             except Exception:
-                line_w = len(line) * (font_size // 2)
+                lw = len(line) * (font_size // 2)
 
-            line_x = right_box_x1 + (text_w - line_w) // 2
-            # Golden text color with subtle glow
-            draw.text((line_x + 1, current_y + 1), line, fill=(0, 0, 0), font=font)
-            draw.text((line_x, current_y), line, fill=(255, 215, 0), font=font)
-            current_y += font_size + 5
+            cur_x = rx1 + (text_box_w - lw) // 2
+            # Drop shadow
+            draw.text((cur_x + 3, cur_y + 3), line, fill=(0, 0, 0), font=font)
+            # Golden title color
+            draw.text((cur_x, cur_y), line, fill=(255, 215, 0), font=font)
+            cur_y += line_spacing
 
         out = io.BytesIO()
         base_img.save(out, format="JPEG", quality=92)
@@ -480,15 +503,6 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
             await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
             return await callback_query.answer(f"🔄 Auto-Play: {new_text}", show_alert=True)
 
-    # Puzzles
-    elif data.startswith("puz_"):
-        if data.startswith("puz_correct"):
-            u_id = callback_query.from_user.id
-            user_scores[u_id] = user_scores.get(u_id, 0) + 10
-            return await callback_query.answer(f"🎉 Sahi Jawab! +10 points mile! Total: {user_scores[u_id]} pts", show_alert=True)
-        else:
-            return await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
-
 # --- 7. ASSISTANT JOIN / LEAVE COMMANDS ---
 @bot.on_message(filters.command(["userbotjoin", "joinassistant"]) & filters.group)
 async def join_assistant_handler(client, message):
@@ -527,7 +541,7 @@ async def play_handler(client, message):
     registered_groups.add(message.chat.id)
     is_video = message.command[0].lower() == "vplay"
     if len(message.command) < 2:
-        return await message.reply_text("Bhai gaane ka naam do! Example: `/play radhe radhe barsane wali`")
+        return await message.reply_text("Bhai gaane ka naam do! Example: `/play shiv tandav`")
 
     query = " ".join(message.command[1:])
     last_playing_query[message.chat.id] = query
