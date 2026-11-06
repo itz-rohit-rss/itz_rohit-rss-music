@@ -42,49 +42,18 @@ if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
     except Exception as e:
         print(f"Static ffmpeg load note: {e}")
 
-# --- 2. FAST RELIABLE TEMPLATE & COOKIES FETCHER ---
-TEMPLATE_PATH = "template.jpg"
-CDN_TEMPLATE_URL = "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/template.jpg"
-
-def fetch_required_assets():
-    # 1. Cookies fetch
-    cookies_url = os.environ.get("COOKIES_URL")
-    if cookies_url:
-        try:
-            req = urllib.request.Request(cookies_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                content = response.read().decode('utf-8')
-                with open("cookies.txt", "w", encoding="utf-8") as f:
-                    f.write(content)
-            print("✅ YouTube cookies.txt successfully updated from COOKIES_URL!")
-        except Exception as e:
-            print(f"⚠️ Cookies download warning: {e}")
-
-    # 2. Ensure template.jpg exists & is valid
-    is_valid = False
-    if os.path.exists(TEMPLATE_PATH) and os.path.getsize(TEMPLATE_PATH) > 20000:
-        try:
-            with Image.open(TEMPLATE_PATH) as test_img:
-                test_img.verify()
-            is_valid = True
-            print("✅ Local template.jpg verified!")
-        except Exception:
-            is_valid = False
-
-    if not is_valid:
-        print("⏳ Fetching fresh template.jpg from CDN...")
-        try:
-            req = urllib.request.Request(CDN_TEMPLATE_URL, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = resp.read()
-                if len(data) > 20000:
-                    with open(TEMPLATE_PATH, "wb") as f:
-                        f.write(data)
-                    print(f"✅ Template successfully saved to disk ({len(data)} bytes)!")
-        except Exception as err:
-            print(f"CDN fetch warning: {err}")
-
-fetch_required_assets()
+# --- 2. COOKIES AUTO-FETCHER ---
+cookies_url = os.environ.get("COOKIES_URL")
+if cookies_url:
+    try:
+        req = urllib.request.Request(cookies_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            content = response.read().decode('utf-8')
+            with open("cookies.txt", "w", encoding="utf-8") as f:
+                f.write(content)
+        print("✅ YouTube cookies.txt successfully updated from COOKIES_URL!")
+    except Exception as e:
+        print(f"⚠️ Cookies download warning: {e}")
 
 # --- 3. CONFIGS & CLIENT SETUP ---
 raw_api_id = os.environ.get("API_ID", "35744976").replace('"', '').replace("'", "").strip()
@@ -120,12 +89,52 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
-# --- BULLETPROOF 2-BOX TEMPLATE POSTER GENERATOR ---
-def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
-    if not os.path.exists(TEMPLATE_PATH) or os.path.getsize(TEMPLATE_PATH) < 20000:
-        fetch_required_assets()
+# --- 4. BULLETPROOF TEMPLATE POSTER LOADER ---
+def load_base_poster_image() -> Image.Image:
+    # Check all possible image files in directory
+    possible_names = [
+        "template.jpg", "template.png", "1793969924167.png",
+        "104707.png", "104707.jpg", "Template.jpg"
+    ]
+    for name in possible_names:
+        if os.path.exists(name):
+            try:
+                with open(name, "rb") as f:
+                    data = f.read()
+                img = Image.open(io.BytesIO(data)).convert("RGB")
+                print(f"🔥 TEMPLATE PHOTO FOUND & LOADED: {name} (Size: {img.size})")
+                return img
+            except Exception as e:
+                print(f"Error opening {name}: {e}")
 
-    base_img = Image.open(TEMPLATE_PATH).convert("RGB")
+    # Auto scan any file in root folder > 50KB
+    for f in os.listdir("."):
+        if f.lower().endswith((".jpg", ".png", ".jpeg")) and not f.startswith("start"):
+            try:
+                if os.path.getsize(f) > 50000:
+                    with open(f, "rb") as fl:
+                        img = Image.open(io.BytesIO(fl.read())).convert("RGB")
+                    print(f"🔥 AUTO-DETECTED TEMPLATE: {f} (Size: {img.size})")
+                    return img
+            except Exception:
+                continue
+
+    # Fallback to direct download from GitHub raw
+    raw_url = "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/template.jpg"
+    try:
+        req = urllib.request.Request(raw_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            img = Image.open(io.BytesIO(resp.read())).convert("RGB")
+            print("🔥 TEMPLATE DOWNLOADED DIRECTLY VIA GITHUB RAW!")
+            return img
+    except Exception as e:
+        print(f"GitHub raw fetch error: {e}")
+
+    raise RuntimeError("Template photo file nahi mili! Make sure template.jpg is in repo.")
+
+# --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
+def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
+    base_img = load_base_poster_image()
     if base_img.size != (2048, 2048):
         base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
 
@@ -234,7 +243,7 @@ def get_player_buttons(chat_id: int):
         ]
     ])
 
-# --- 4. HIGH-SPEED AUDIO ENGINE ---
+# --- 5. HIGH-SPEED AUDIO ENGINE ---
 async def fetch_local_audio(query: str, chat_id: int):
     for f in glob.glob(f"downloads/{chat_id}.*"):
         try:
@@ -344,7 +353,7 @@ async def trigger_autoplay(chat_id: int):
         except Exception:
             pass
 
-# --- 5. AUTO-LEAVE & AUTO-PLAY LISTENER ---
+# --- 6. AUTO-LEAVE & AUTO-PLAY LISTENER ---
 @call_py.on_update()
 async def stream_update_handler(client, update):
     update_type = type(update).__name__
@@ -366,7 +375,7 @@ async def stream_update_handler(client, update):
                 except Exception as e:
                     print(f"Auto-leave error: {e}")
 
-# --- 6. START & CALLBACK HANDLERS ---
+# --- 7. START & CALLBACK HANDLERS ---
 @bot.on_message(filters.command(["start"]))
 async def start_handler(client, message):
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
@@ -497,7 +506,7 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
             await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
             return await callback_query.answer(f"🔄 Auto-Play: {new_text}", show_alert=True)
 
-# --- 7. ASSISTANT JOIN / LEAVE COMMANDS ---
+# --- 8. ASSISTANT JOIN / LEAVE COMMANDS ---
 @bot.on_message(filters.command(["userbotjoin", "joinassistant"]) & filters.group)
 async def join_assistant_handler(client, message):
     chat_id = message.chat.id
@@ -529,7 +538,7 @@ async def leave_assistant_handler(client, message):
     except Exception as e:
         await message.reply_text(f"❌ Leave error: {e}")
 
-# --- 8. PLAY COMMAND & VC STREAM ---
+# --- 9. PLAY COMMAND & VC STREAM ---
 @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
 async def play_handler(client, message):
     registered_groups.add(message.chat.id)
@@ -584,7 +593,6 @@ async def play_handler(client, message):
             print(f"Poster creation err: {err}")
 
     if poster:
-        # Unique timestamp filename to break Telegram photo caching
         poster.name = f"poster_{int(time.time())}.jpg"
         await message.reply_photo(photo=poster, caption=caption, reply_markup=buttons)
     else:
@@ -622,7 +630,7 @@ async def resume_handler(client, message):
     except Exception as e:
         await message.reply_text(f"Error: {e}")
 
-# --- 9. TAGGING SYSTEM ---
+# --- 10. TAGGING SYSTEM ---
 @bot.on_message(filters.command(["tagall", "tag", "vctag"]) & filters.group)
 async def tag_handler(client, message):
     registered_groups.add(message.chat.id)
@@ -675,7 +683,7 @@ async def cancel_handler(client, message):
     else:
         await message.reply_text("Koi active tagging nahi chal rahi thi.")
 
-# --- 10. BOT LAUNCH ---
+# --- 11. BOT LAUNCH ---
 async def start_services():
     await bot.start()
     await user.start()
