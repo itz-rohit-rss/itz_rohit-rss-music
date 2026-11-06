@@ -6,6 +6,8 @@ import time
 import shutil
 import random
 import asyncio
+import textwrap
+import urllib.request
 from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatType
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -40,15 +42,34 @@ if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
     except Exception as e:
         print(f"Static ffmpeg load note: {e}")
 
-# --- 2. CONFIGS & CLIENT SETUP ---
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-STRING_SESSION = os.environ.get("STRING_SESSION")
-OWNER_ID = int(os.environ.get("OWNER_ID", "7885190981"))
-SUDO_USERS = [OWNER_ID]
+# --- 2. COOKIES AUTO-FETCHER ---
+cookies_url = os.environ.get("COOKIES_URL")
+if cookies_url:
+    try:
+        req = urllib.request.Request(cookies_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            content = response.read().decode('utf-8')
+            with open("cookies.txt", "w", encoding="utf-8") as f:
+                f.write(content)
+        print("✅ YouTube cookies.txt successfully updated from COOKIES_URL!")
+    except Exception as e:
+        print(f"⚠️ Cookies download warning: {e}")
+
+# --- 3. CONFIGS & CLIENT SETUP ---
+raw_api_id = os.environ.get("API_ID", "35744976").replace('"', '').replace("'", "").strip()
+API_ID = int(raw_api_id) if raw_api_id.isdigit() else 35744976
+
+API_HASH = os.environ.get("API_HASH", "459c0a59bdca46c1069916ef20ce70c9").replace('"', '').replace("'", "").strip()
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").replace('"', '').replace("'", "").strip()
+
+raw_string = os.environ.get("STRING_SESSION") or os.environ.get("SESSION1", "")
+STRING_SESSION = raw_string.replace('"', '').replace("'", "").strip()
+
+raw_owner = os.environ.get("OWNER_ID", "7885190981").replace('"', '').replace("'", "").strip()
+OWNER_ID = int(raw_owner) if raw_owner.isdigit() else 7885190981
 
 START_IMG = "start.jpg" if os.path.exists("start.jpg") else "https://telegra.ph/file/0c9769399df3d854eb094.jpg"
+TEMPLATE_PATH = "template.jpg"
 
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
@@ -58,9 +79,9 @@ call_py = PyTgCalls(user)
 active_tags = {}
 user_scores = {}
 registered_groups = set()
-autoplay_enabled = {}       # chat_id -> bool
-last_playing_query = {}     # chat_id -> str
-is_paused_dict = {}         # chat_id -> bool
+autoplay_enabled = {}
+last_playing_query = {}
+is_paused_dict = {}
 
 RANDOM_TAG_MESSAGES = [
     "Kahan so rahe ho sab? Active ho jao!",
@@ -70,44 +91,92 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
-def add_watermark(image_bytes: bytes) -> io.BytesIO:
+# --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
+def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
     try:
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-        width, height = image.size
+        if os.path.exists(TEMPLATE_PATH):
+            base_img = Image.open(TEMPLATE_PATH).convert("RGB")
+        else:
+            base_img = Image.new("RGB", (1024, 1024), color=(20, 20, 20))
 
-        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
+        width, height = base_img.size
 
-        bar_height = max(int(height * 0.18), 50)
-        draw.rectangle([(0, height - bar_height), (width, height)], fill=(0, 0, 0, 205))
-        draw.rectangle([(0, height - bar_height), (width, height - bar_height + 5)], fill=(255, 69, 0, 255))
+        # 1. Box 1 (Left Box - Thumbnail Picture)
+        left_box_x1 = int(width * 0.043)
+        left_box_y1 = int(height * 0.718)
+        left_box_x2 = int(width * 0.354)
+        left_box_y2 = int(height * 0.942)
+        box_w = left_box_x2 - left_box_x1
+        box_h = left_box_y2 - left_box_y1
 
-        text = "👑 BOT OWNER: ROHIT CHAUHAN (रोहित चौहान) 👑"
-        
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(bar_height * 0.38))
-        except Exception:
+        if thumb_bytes:
             try:
-                font = ImageFont.truetype("arial.ttf", int(bar_height * 0.38))
+                song_thumb = Image.open(io.BytesIO(thumb_bytes)).convert("RGB")
+                song_thumb = song_thumb.resize((box_w, box_h), Image.Resampling.LANCZOS)
+                base_img.paste(song_thumb, (left_box_x1, left_box_y1))
+            except Exception as e:
+                print(f"Paste thumb error: {e}")
+
+        # 2. Box 2 (Right Box - Song Name Text)
+        right_box_x1 = int(width * 0.435)
+        right_box_y1 = int(height * 0.805)
+        right_box_x2 = int(width * 0.915)
+        right_box_y2 = int(height * 0.935)
+        text_w = right_box_x2 - right_box_x1
+        text_h = right_box_y2 - right_box_y1
+
+        draw = ImageDraw.Draw(base_img)
+        # Black backdrop inside right box for high contrast
+        draw.rectangle([(right_box_x1, right_box_y1), (right_box_x2, right_box_y2)], fill=(10, 10, 10, 240))
+
+        # Font setup
+        font_size = max(int(text_h * 0.28), 16)
+        font = None
+        for font_path in [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "arialbd.ttf",
+            "arial.ttf"
+        ]:
+            if os.path.exists(font_path):
+                try:
+                    font = ImageFont.truetype(font_path, font_size)
+                    break
+                except Exception:
+                    continue
+        if font is None:
+            font = ImageFont.load_default()
+
+        # Wrap text nicely inside right box
+        clean_title = song_title.strip()
+        lines = textwrap.wrap(clean_title, width=22)
+        if len(lines) > 2:
+            lines = lines[:2]
+            lines[1] = lines[1][:19] + "..."
+
+        total_lines_height = len(lines) * (font_size + 4)
+        current_y = right_box_y1 + (text_h - total_lines_height) // 2
+
+        for line in lines:
+            try:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                line_w = bbox[2] - bbox[0]
             except Exception:
-                font = ImageFont.load_default()
+                line_w = len(line) * (font_size // 2)
 
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-        text_x = (width - text_w) // 2
-        text_y = height - bar_height + (bar_height - text_h) // 2
+            line_x = right_box_x1 + (text_w - line_w) // 2
+            # Golden text color with subtle glow
+            draw.text((line_x + 1, current_y + 1), line, fill=(0, 0, 0), font=font)
+            draw.text((line_x, current_y), line, fill=(255, 215, 0), font=font)
+            current_y += font_size + 5
 
-        draw.text((text_x, text_y), text, fill=(255, 215, 0, 255), font=font)
-
-        final_img = Image.alpha_composite(image, overlay).convert("RGB")
         out = io.BytesIO()
-        final_img.save(out, format="JPEG", quality=90)
+        base_img.save(out, format="JPEG", quality=92)
         out.seek(0)
         return out
     except Exception as e:
-        print(f"Watermark error: {e}")
-        return io.BytesIO(image_bytes)
+        print(f"Custom poster error: {e}")
+        return io.BytesIO(thumb_bytes) if thumb_bytes else None
 
 def get_start_markup(bot_username: str):
     return InlineKeyboardMarkup([
@@ -148,7 +217,7 @@ def get_player_buttons(chat_id: int):
         ]
     ])
 
-# --- 3. HIGH-SPEED AUDIO ENGINE ---
+# --- 4. HIGH-SPEED AUDIO ENGINE ---
 async def fetch_local_audio(query: str, chat_id: int):
     for f in glob.glob(f"downloads/{chat_id}.*"):
         try:
@@ -205,14 +274,14 @@ async def fetch_local_audio(query: str, chat_id: int):
         return res
     raise Exception("Gaana nahi mila. Kripya doosra naam ya link dein.")
 
-# Helper to automatically trigger auto-play
+# Auto-play Trigger
 async def trigger_autoplay(chat_id: int):
     prev_query = last_playing_query.get(chat_id, "romantic hindi songs")
     recommend_seeds = [
-        f"{prev_query} song mix",
+        f"{prev_query} mix",
         f"{prev_query} mashup",
-        f"best of {prev_query}",
-        "trending bollywood songs"
+        f"trending bollywood songs",
+        f"best hindi hits"
     ]
     next_query = random.choice(recommend_seeds)
     try:
@@ -231,10 +300,26 @@ async def trigger_autoplay(chat_id: int):
             f"🔄 **Auto-Play Triggered (Next Song):**\n"
             f"▶️ **Song:** `{track['title']}`\n"
             f"⏳ **Duration:** `{track['duration']}`\n\n"
-            f"🔥 *Non-Stop Music Engine Active!*"
+            f"🔥 *Non-Stop Music Active!*"
         )
         buttons = get_player_buttons(chat_id)
-        await bot.send_message(chat_id, caption, reply_markup=buttons)
+
+        poster = None
+        if track.get("thumbnail"):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(track["thumbnail"], timeout=10) as resp:
+                        if resp.status == 200:
+                            raw_thumb = await resp.read()
+                            poster = create_custom_poster(raw_thumb, track['title'])
+            except Exception:
+                pass
+
+        if poster:
+            poster.name = "rohit_chauhan_vip.jpg"
+            await bot.send_photo(chat_id, photo=poster, caption=caption, reply_markup=buttons)
+        else:
+            await bot.send_message(chat_id, caption, reply_markup=buttons)
     except Exception as e:
         print(f"Auto-play next error: {e}")
         try:
@@ -242,16 +327,15 @@ async def trigger_autoplay(chat_id: int):
         except Exception:
             pass
 
-# --- 4. AUTO-LEAVE & AUTO-PLAY LISTENER ---
+# --- 5. AUTO-LEAVE & AUTO-PLAY LISTENER ---
 @call_py.on_update()
 async def stream_update_handler(client, update):
     update_type = type(update).__name__
     if any(k in update_type for k in ["StreamAudioEnded", "StreamVideoEnded", "StreamEnded"]):
         chat_id = getattr(update, "chat_id", None)
         if chat_id:
-            # Check if Auto-Play is ON
             if autoplay_enabled.get(chat_id, False):
-                await bot.send_message(chat_id, "🔄 **Gaana khatam hua! Auto-play agla gaana queue kar raha hai...**")
+                await bot.send_message(chat_id, "🔄 **Gaana samapt hua! Auto-play agla song chala raha hai...**")
                 await trigger_autoplay(chat_id)
             else:
                 try:
@@ -261,14 +345,11 @@ async def stream_update_handler(client, update):
                             os.remove(f)
                         except Exception:
                             pass
-                    await bot.send_message(
-                        chat_id,
-                        "⏹️ **Gaana samapt! Assistant ne VC successfully leave kar diya.**"
-                    )
+                    await bot.send_message(chat_id, "⏹️ **Gaana samapt! Assistant ne VC successfully leave kar diya.**")
                 except Exception as e:
                     print(f"Auto-leave error: {e}")
 
-# --- 5. START & CALLBACK HANDLERS ---
+# --- 6. START & CALLBACK HANDLERS ---
 @bot.on_message(filters.command(["start"]))
 async def start_handler(client, message):
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
@@ -297,7 +378,6 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
     data = callback_query.data
     chat_id = callback_query.message.chat.id
 
-    # 1. Start menu callbacks
     if data == "bot_help":
         help_text = (
             "🛠 **VIP Music & Management Commands:**\n\n"
@@ -335,17 +415,17 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
         return await callback_query.answer()
 
     elif data == "bot_lang":
-        return await callback_query.answer("🌐 Language is already set to Default (Hindi / English)!", show_alert=True)
+        return await callback_query.answer("🌐 Language: Default (Hindi / English)!", show_alert=True)
 
     elif data == "bot_source":
-        return await callback_query.answer("👑 Developed exclusively for Rohit Chauhan (@itz_rohit_rss)!", show_alert=True)
+        return await callback_query.answer("👑 Exclusively built for Rohit Chauhan (@itz_rohit_rss)!", show_alert=True)
 
     elif data == "bot_ping":
         start_ping = time.time()
         delta = round((time.time() - start_ping) * 1000)
-        return await callback_query.answer(f"🏓 VIP Pong: {delta}ms | Server 100% Superfast! 🔥", show_alert=True)
+        return await callback_query.answer(f"🏓 VIP Pong: {delta}ms | Server Fast! 🔥", show_alert=True)
 
-    # 2. Player Controls Callbacks
+    # Player Controls Callbacks
     elif data.startswith("playctrl_"):
         action, target_cid_str = data.split(":")
         target_cid = int(target_cid_str)
@@ -383,7 +463,7 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
             return await callback_query.message.edit_text("⏹️ **Gaana stop kar diya aur Assistant VC se bahar aa gaya!**")
 
         elif action == "playctrl_skip":
-            await callback_query.answer("⏭ Skipping to next track...", show_alert=False)
+            await callback_query.answer("⏭ Skipping track...", show_alert=False)
             if autoplay_enabled.get(target_cid, False):
                 await trigger_autoplay(target_cid)
             else:
@@ -391,26 +471,25 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
                     await call_py.leave_call(target_cid)
                 except Exception:
                     pass
-                await callback_query.message.edit_text("⏭️ **Song skip kar diya gaya! (Auto-play off tha toh VC leave ho gaya)**")
+                await callback_query.message.edit_text("⏭️ **Song skip kar diya gaya! (Auto-play off tha)**")
 
         elif action == "playctrl_autoplay":
-            # Toggle Autoplay
             current_status = autoplay_enabled.get(target_cid, False)
             autoplay_enabled[target_cid] = not current_status
-            new_text = "ON 🟢 (Gaane lagataar chalenge)" if autoplay_enabled[target_cid] else "OFF 🔴 (Gaana khatam hone par VC leave karega)"
+            new_text = "ON 🟢" if autoplay_enabled[target_cid] else "OFF 🔴"
             await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
-            return await callback_query.answer(f"🔄 Auto-Play set to: {new_text}", show_alert=True)
+            return await callback_query.answer(f"🔄 Auto-Play: {new_text}", show_alert=True)
 
-    # 3. Puzzles
+    # Puzzles
     elif data.startswith("puz_"):
         if data.startswith("puz_correct"):
             u_id = callback_query.from_user.id
             user_scores[u_id] = user_scores.get(u_id, 0) + 10
-            return await callback_query.answer(f"🎉 Sahi Jawab! Aapko +10 points mile! Total: {user_scores[u_id]} pts", show_alert=True)
+            return await callback_query.answer(f"🎉 Sahi Jawab! +10 points mile! Total: {user_scores[u_id]} pts", show_alert=True)
         else:
             return await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
 
-# --- 6. ASSISTANT JOIN / LEAVE COMMANDS ---
+# --- 7. ASSISTANT JOIN / LEAVE COMMANDS ---
 @bot.on_message(filters.command(["userbotjoin", "joinassistant"]) & filters.group)
 async def join_assistant_handler(client, message):
     chat_id = message.chat.id
@@ -442,13 +521,13 @@ async def leave_assistant_handler(client, message):
     except Exception as e:
         await message.reply_text(f"❌ Leave error: {e}")
 
-# --- 7. PLAY COMMAND & VC STREAM ---
+# --- 8. PLAY COMMAND & VC STREAM ---
 @bot.on_message(filters.command(["play", "vplay"]) & filters.group)
 async def play_handler(client, message):
     registered_groups.add(message.chat.id)
     is_video = message.command[0].lower() == "vplay"
     if len(message.command) < 2:
-        return await message.reply_text("Bhai gaane ka naam do! Example: `/play shiv tandav`")
+        return await message.reply_text("Bhai gaane ka naam do! Example: `/play radhe radhe barsane wali`")
 
     query = " ".join(message.command[1:])
     last_playing_query[message.chat.id] = query
@@ -485,19 +564,22 @@ async def play_handler(client, message):
 
     await m.delete()
 
+    poster = None
     if track.get("thumbnail"):
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(track["thumbnail"], timeout=10) as resp:
                     if resp.status == 200:
                         raw_thumb = await resp.read()
-                        watermarked_thumb = add_watermark(raw_thumb)
-                        watermarked_thumb.name = "rohit_chauhan.jpg"
-                        return await message.reply_photo(photo=watermarked_thumb, caption=caption, reply_markup=buttons)
-        except Exception:
-            pass
+                        poster = create_custom_poster(raw_thumb, track["title"])
+        except Exception as err:
+            print(f"Poster creation err: {err}")
 
-    await message.reply_text(caption, reply_markup=buttons)
+    if poster:
+        poster.name = "rohit_chauhan_vip.jpg"
+        await message.reply_photo(photo=poster, caption=caption, reply_markup=buttons)
+    else:
+        await message.reply_text(caption, reply_markup=buttons)
 
 @bot.on_message(filters.command(["stop", "skip", "leave", "leavevc", "end"]) & filters.group)
 async def stop_handler(client, message):
@@ -531,7 +613,7 @@ async def resume_handler(client, message):
     except Exception as e:
         await message.reply_text(f"Error: {e}")
 
-# --- 8. TAGGING SYSTEM ---
+# --- 9. TAGGING SYSTEM ---
 @bot.on_message(filters.command(["tagall", "tag", "vctag"]) & filters.group)
 async def tag_handler(client, message):
     registered_groups.add(message.chat.id)
@@ -584,41 +666,6 @@ async def cancel_handler(client, message):
     else:
         await message.reply_text("Koi active tagging nahi chal rahi thi.")
 
-# --- 9. PUZZLE / QUIZ HOURLY TASK ---
-PUZZLES = [
-    {"q": "Puzzle: Is box me kaunsa naam likha hai?\n\n[ R O H I T ]", "opts": ["ROHIT", "MOHIT", "VIKAS", "AJAY"], "ans": "ROHIT"},
-    {"q": "Group ka Asli Boss kaun hai?", "opts": ["रोहित चौहान", "Koi Aur", "Bot", "Admin"], "ans": "रोहित चौहान"},
-    {"q": "Fast Math: 10 + 20 × 2 kitna hota hai?", "opts": ["50", "60", "40", "30"], "ans": "50"},
-]
-
-async def hourly_puzzle_loop():
-    while True:
-        await asyncio.sleep(3600)
-        if not registered_groups:
-            continue
-
-        p = random.choice(PUZZLES)
-        buttons = []
-        row = []
-        for opt in p["opts"]:
-            cb_data = f"puz_correct:{opt}" if opt == p["ans"] else "puz_wrong"
-            row.append(InlineKeyboardButton(opt, callback_data=cb_data))
-            if len(row) == 2:
-                buttons.append(row)
-                row = []
-        if row:
-            buttons.append(row)
-
-        for chat_id in list(registered_groups):
-            try:
-                await bot.send_message(
-                    chat_id,
-                    f"🧩 **PUZZLE TIME (हर 1 घंटे में):**\n\n{p['q']}\n\n*सही जवाब देने वाले को 10 Points मिलेंगे!*",
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
-            except Exception:
-                pass
-
 # --- 10. BOT LAUNCH ---
 async def start_services():
     await bot.start()
@@ -636,7 +683,6 @@ async def start_services():
         print(f"PyTgCalls startup note: {e}")
 
     print("🔥 Rohit Chauhan's Custom VIP Bot is LIVE & Dominating! 🔥")
-    asyncio.create_task(hourly_puzzle_loop())
     await idle()
     await bot.stop()
     await user.stop()
