@@ -17,7 +17,7 @@ import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
-# Ensure downloads directory exists
+# Ensure directories exist
 os.makedirs("downloads", exist_ok=True)
 
 # --- 1. SYSTEM & NIX FFPROBE/FFMPEG AUTO-LINK ---
@@ -42,18 +42,46 @@ if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
     except Exception as e:
         print(f"Static ffmpeg load note: {e}")
 
-# --- 2. COOKIES AUTO-FETCHER ---
-cookies_url = os.environ.get("COOKIES_URL")
-if cookies_url:
-    try:
-        req = urllib.request.Request(cookies_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            content = response.read().decode('utf-8')
-            with open("cookies.txt", "w", encoding="utf-8") as f:
-                f.write(content)
-        print("✅ YouTube cookies.txt successfully updated from COOKIES_URL!")
-    except Exception as e:
-        print(f"⚠️ Cookies download warning: {e}")
+# --- 2. COOKIES & TEMPLATE AUTO-DOWNLOADER ---
+TEMPLATE_PATH = "template.jpg"
+TEMPLATE_URLS = [
+    "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/template.jpg",
+    "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/1793969924167.png"
+]
+
+def ensure_assets():
+    # 1. Cookies fetch
+    cookies_url = os.environ.get("COOKIES_URL")
+    if cookies_url:
+        try:
+            req = urllib.request.Request(cookies_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read().decode('utf-8')
+                with open("cookies.txt", "w", encoding="utf-8") as f:
+                    f.write(content)
+            print("✅ YouTube cookies.txt successfully updated from COOKIES_URL!")
+        except Exception as e:
+            print(f"⚠️ Cookies download warning: {e}")
+
+    # 2. Template poster check & auto-download
+    if not os.path.exists(TEMPLATE_PATH) or os.path.getsize(TEMPLATE_PATH) < 10000:
+        print("⏳ template.jpg missing on disk, downloading directly from GitHub...")
+        for t_url in TEMPLATE_URLS:
+            try:
+                req = urllib.request.Request(t_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = resp.read()
+                    if len(data) > 10000:
+                        with open(TEMPLATE_PATH, "wb") as f:
+                            f.write(data)
+                        print(f"✅ template.jpg downloaded successfully from {t_url} ({len(data)} bytes)!")
+                        break
+            except Exception as err:
+                print(f"Failed fetching {t_url}: {err}")
+    else:
+        print(f"✅ template.jpg verified on disk ({os.path.getsize(TEMPLATE_PATH)} bytes)!")
+
+ensure_assets()
 
 # --- 3. CONFIGS & CLIENT SETUP ---
 raw_api_id = os.environ.get("API_ID", "35744976").replace('"', '').replace("'", "").strip()
@@ -90,45 +118,16 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
-# --- ROBUST BASE TEMPLATE LOADER ---
-def get_base_poster():
-    # 1. Direct file check
-    search_files = [
-        "template.jpg", "template.png", "template.jpeg",
-        "Template.jpg", "Template.png", "1793969924167.png",
-        "104707.png", "104707.jpg"
-    ]
-    for fn in search_files:
-        if os.path.isfile(fn):
-            try:
-                with open(fn, "rb") as f:
-                    img_bytes = f.read()
-                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                print(f"✅ Successfully loaded template from file: {fn} ({img.size})")
-                return img
-            except Exception as e:
-                print(f"Failed opening {fn}: {e}")
-
-    # 2. Any image in root > 300KB (excluding start/downloaded ones)
-    for root_file in os.listdir("."):
-        if root_file.lower().endswith((".jpg", ".png", ".jpeg")) and not root_file.startswith("start"):
-            try:
-                if os.path.getsize(root_file) > 100000: # greater than 100KB
-                    with open(root_file, "rb") as f:
-                        img_bytes = f.read()
-                    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                    print(f"✅ Auto-detected large template image: {root_file} ({img.size})")
-                    return img
-            except Exception:
-                pass
-
-    print("⚠️ Warning: No template image could be loaded! Creating fallback canvas.")
-    return Image.new("RGB", (2048, 2048), color=(15, 15, 15))
-
 # --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
 def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
     try:
-        base_img = get_base_poster()
+        # Load verified template image
+        if os.path.exists(TEMPLATE_PATH):
+            base_img = Image.open(TEMPLATE_PATH).convert("RGB")
+        else:
+            ensure_assets()
+            base_img = Image.open(TEMPLATE_PATH).convert("RGB")
+
         if base_img.size != (2048, 2048):
             base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
 
@@ -151,10 +150,8 @@ def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
         text_box_h = ry2 - ry1
 
         draw = ImageDraw.Draw(base_img)
-        # Clean dark backdrop to cover previous placeholder text
         draw.rectangle([(rx1, ry1), (rx2, ry2)], fill=(12, 4, 4))
 
-        # Font setup (65px)
         font_size = 65
         font = None
         for font_path in [
@@ -190,13 +187,10 @@ def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
                 lw = len(line) * (font_size // 2)
 
             cur_x = rx1 + (text_box_w - lw) // 2
-            # Drop shadow
             draw.text((cur_x + 3, cur_y + 3), line, fill=(0, 0, 0), font=font)
-            # Golden title color
             draw.text((cur_x, cur_y), line, fill=(255, 215, 0), font=font)
             cur_y += line_spacing
 
-        # Resize to 1280x1280 for fast Telegram delivery
         final_img = base_img.resize((1280, 1280), Image.Resampling.LANCZOS)
         out = io.BytesIO()
         final_img.save(out, format="JPEG", quality=88)
