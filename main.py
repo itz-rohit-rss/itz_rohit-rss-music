@@ -17,7 +17,7 @@ import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
-# Ensure directories exist
+# Ensure downloads directory exists
 os.makedirs("downloads", exist_ok=True)
 
 # --- 1. SYSTEM & NIX FFPROBE/FFMPEG AUTO-LINK ---
@@ -42,14 +42,11 @@ if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
     except Exception as e:
         print(f"Static ffmpeg load note: {e}")
 
-# --- 2. COOKIES & TEMPLATE AUTO-DOWNLOADER ---
+# --- 2. FAST RELIABLE TEMPLATE & COOKIES FETCHER ---
 TEMPLATE_PATH = "template.jpg"
-TEMPLATE_URLS = [
-    "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/template.jpg",
-    "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/1793969924167.png"
-]
+CDN_TEMPLATE_URL = "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/template.jpg"
 
-def ensure_assets():
+def fetch_required_assets():
     # 1. Cookies fetch
     cookies_url = os.environ.get("COOKIES_URL")
     if cookies_url:
@@ -63,25 +60,31 @@ def ensure_assets():
         except Exception as e:
             print(f"⚠️ Cookies download warning: {e}")
 
-    # 2. Template poster check & auto-download
-    if not os.path.exists(TEMPLATE_PATH) or os.path.getsize(TEMPLATE_PATH) < 10000:
-        print("⏳ template.jpg missing on disk, downloading directly from GitHub...")
-        for t_url in TEMPLATE_URLS:
-            try:
-                req = urllib.request.Request(t_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = resp.read()
-                    if len(data) > 10000:
-                        with open(TEMPLATE_PATH, "wb") as f:
-                            f.write(data)
-                        print(f"✅ template.jpg downloaded successfully from {t_url} ({len(data)} bytes)!")
-                        break
-            except Exception as err:
-                print(f"Failed fetching {t_url}: {err}")
-    else:
-        print(f"✅ template.jpg verified on disk ({os.path.getsize(TEMPLATE_PATH)} bytes)!")
+    # 2. Ensure template.jpg exists & is valid
+    is_valid = False
+    if os.path.exists(TEMPLATE_PATH) and os.path.getsize(TEMPLATE_PATH) > 20000:
+        try:
+            with Image.open(TEMPLATE_PATH) as test_img:
+                test_img.verify()
+            is_valid = True
+            print("✅ Local template.jpg verified!")
+        except Exception:
+            is_valid = False
 
-ensure_assets()
+    if not is_valid:
+        print("⏳ Fetching fresh template.jpg from CDN...")
+        try:
+            req = urllib.request.Request(CDN_TEMPLATE_URL, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+                if len(data) > 20000:
+                    with open(TEMPLATE_PATH, "wb") as f:
+                        f.write(data)
+                    print(f"✅ Template successfully saved to disk ({len(data)} bytes)!")
+        except Exception as err:
+            print(f"CDN fetch warning: {err}")
+
+fetch_required_assets()
 
 # --- 3. CONFIGS & CLIENT SETUP ---
 raw_api_id = os.environ.get("API_ID", "35744976").replace('"', '').replace("'", "").strip()
@@ -102,7 +105,6 @@ bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
 call_py = PyTgCalls(user)
 
-# Active states & Auto-play trackers
 active_tags = {}
 user_scores = {}
 registered_groups = set()
@@ -118,87 +120,80 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
-# --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
+# --- BULLETPROOF 2-BOX TEMPLATE POSTER GENERATOR ---
 def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
-    try:
-        # Load verified template image
-        if os.path.exists(TEMPLATE_PATH):
-            base_img = Image.open(TEMPLATE_PATH).convert("RGB")
-        else:
-            ensure_assets()
-            base_img = Image.open(TEMPLATE_PATH).convert("RGB")
+    if not os.path.exists(TEMPLATE_PATH) or os.path.getsize(TEMPLATE_PATH) < 20000:
+        fetch_required_assets()
 
-        if base_img.size != (2048, 2048):
-            base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
+    base_img = Image.open(TEMPLATE_PATH).convert("RGB")
+    if base_img.size != (2048, 2048):
+        base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
 
-        # 1. Left Box (Thumbnail Frame: x: 95-705, y: 1490-1930)
-        lx1, ly1, lx2, ly2 = 95, 1490, 705, 1930
-        box_w = lx2 - lx1
-        box_h = ly2 - ly1
+    # 1. Left Box (Thumbnail Frame: x: 95-705, y: 1490-1930)
+    lx1, ly1, lx2, ly2 = 95, 1490, 705, 1930
+    box_w = lx2 - lx1
+    box_h = ly2 - ly1
 
-        if thumb_bytes:
+    if thumb_bytes:
+        try:
+            song_thumb = Image.open(io.BytesIO(thumb_bytes)).convert("RGB")
+            song_thumb = song_thumb.resize((box_w, box_h), Image.Resampling.LANCZOS)
+            base_img.paste(song_thumb, (lx1, ly1))
+        except Exception as e:
+            print(f"Paste thumb error: {e}")
+
+    # 2. Right Box (Song Name Frame: x: 880-1870, y: 1635-1925)
+    rx1, ry1, rx2, ry2 = 880, 1635, 1870, 1925
+    text_box_w = rx2 - rx1
+    text_box_h = ry2 - ry1
+
+    draw = ImageDraw.Draw(base_img)
+    draw.rectangle([(rx1, ry1), (rx2, ry2)], fill=(12, 4, 4))
+
+    font_size = 65
+    font = None
+    for font_path in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "arialbd.ttf",
+        "arial.ttf"
+    ]:
+        if os.path.exists(font_path):
             try:
-                song_thumb = Image.open(io.BytesIO(thumb_bytes)).convert("RGB")
-                song_thumb = song_thumb.resize((box_w, box_h), Image.Resampling.LANCZOS)
-                base_img.paste(song_thumb, (lx1, ly1))
-            except Exception as e:
-                print(f"Paste thumb error: {e}")
-
-        # 2. Right Box (Song Name Frame: x: 880-1870, y: 1635-1925)
-        rx1, ry1, rx2, ry2 = 880, 1635, 1870, 1925
-        text_box_w = rx2 - rx1
-        text_box_h = ry2 - ry1
-
-        draw = ImageDraw.Draw(base_img)
-        draw.rectangle([(rx1, ry1), (rx2, ry2)], fill=(12, 4, 4))
-
-        font_size = 65
-        font = None
-        for font_path in [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "arialbd.ttf",
-            "arial.ttf"
-        ]:
-            if os.path.exists(font_path):
-                try:
-                    font = ImageFont.truetype(font_path, font_size)
-                    break
-                except Exception:
-                    continue
-        if font is None:
-            font = ImageFont.load_default()
-
-        clean_title = song_title.replace(".mp3", "").strip()
-        lines = textwrap.wrap(clean_title, width=22)
-        if len(lines) > 2:
-            lines = lines[:2]
-            lines[1] = lines[1][:19] + "..."
-
-        line_spacing = 80
-        total_text_h = len(lines) * line_spacing
-        cur_y = ry1 + (text_box_h - total_text_h) // 2
-
-        for line in lines:
-            try:
-                bbox = draw.textbbox((0, 0), line, font=font)
-                lw = bbox[2] - bbox[0]
+                font = ImageFont.truetype(font_path, font_size)
+                break
             except Exception:
-                lw = len(line) * (font_size // 2)
+                continue
+    if font is None:
+        font = ImageFont.load_default()
 
-            cur_x = rx1 + (text_box_w - lw) // 2
-            draw.text((cur_x + 3, cur_y + 3), line, fill=(0, 0, 0), font=font)
-            draw.text((cur_x, cur_y), line, fill=(255, 215, 0), font=font)
-            cur_y += line_spacing
+    clean_title = song_title.replace(".mp3", "").strip()
+    lines = textwrap.wrap(clean_title, width=22)
+    if len(lines) > 2:
+        lines = lines[:2]
+        lines[1] = lines[1][:19] + "..."
 
-        final_img = base_img.resize((1280, 1280), Image.Resampling.LANCZOS)
-        out = io.BytesIO()
-        final_img.save(out, format="JPEG", quality=88)
-        out.seek(0)
-        return out
-    except Exception as e:
-        print(f"Custom poster error: {e}")
-        return io.BytesIO(thumb_bytes) if thumb_bytes else None
+    line_spacing = 80
+    total_text_h = len(lines) * line_spacing
+    cur_y = ry1 + (text_box_h - total_text_h) // 2
+
+    for line in lines:
+        try:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            lw = bbox[2] - bbox[0]
+        except Exception:
+            lw = len(line) * (font_size // 2)
+
+        cur_x = rx1 + (text_box_w - lw) // 2
+        draw.text((cur_x + 3, cur_y + 3), line, fill=(0, 0, 0), font=font)
+        draw.text((cur_x, cur_y), line, fill=(255, 215, 0), font=font)
+        cur_y += line_spacing
+
+    final_img = base_img.resize((1280, 1280), Image.Resampling.LANCZOS)
+    out = io.BytesIO()
+    final_img.save(out, format="JPEG", quality=90)
+    out.seek(0)
+    return out
 
 def get_start_markup(bot_username: str):
     return InlineKeyboardMarkup([
@@ -338,7 +333,7 @@ async def trigger_autoplay(chat_id: int):
                 pass
 
         if poster:
-            poster.name = "rohit_chauhan_vip.jpg"
+            poster.name = f"poster_{int(time.time())}.jpg"
             await bot.send_photo(chat_id, photo=poster, caption=caption, reply_markup=buttons)
         else:
             await bot.send_message(chat_id, caption, reply_markup=buttons)
@@ -502,15 +497,6 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
             await callback_query.edit_message_reply_markup(reply_markup=get_player_buttons(target_cid))
             return await callback_query.answer(f"🔄 Auto-Play: {new_text}", show_alert=True)
 
-    # Puzzles
-    elif data.startswith("puz_"):
-        if data.startswith("puz_correct"):
-            u_id = callback_query.from_user.id
-            user_scores[u_id] = user_scores.get(u_id, 0) + 10
-            return await callback_query.answer(f"🎉 Sahi Jawab! +10 points mile! Total: {user_scores[u_id]} pts", show_alert=True)
-        else:
-            return await callback_query.answer("❌ Galat Jawab! Agli baar try karein.", show_alert=True)
-
 # --- 7. ASSISTANT JOIN / LEAVE COMMANDS ---
 @bot.on_message(filters.command(["userbotjoin", "joinassistant"]) & filters.group)
 async def join_assistant_handler(client, message):
@@ -598,7 +584,8 @@ async def play_handler(client, message):
             print(f"Poster creation err: {err}")
 
     if poster:
-        poster.name = "rohit_chauhan_vip.jpg"
+        # Unique timestamp filename to break Telegram photo caching
+        poster.name = f"poster_{int(time.time())}.jpg"
         await message.reply_photo(photo=poster, caption=caption, reply_markup=buttons)
     else:
         await message.reply_text(caption, reply_markup=buttons)
