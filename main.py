@@ -90,43 +90,42 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
-# --- SMART TEMPLATE LOADER ---
+# --- SMART TEMPLATE DETECTOR ---
 def load_base_template():
-    possible_names = [
+    # Priority 1: Common names
+    priority_names = [
         "template.jpg", "template.png", "template.jpeg",
-        "Template.jpg", "Template.png", "TEMPLATE.JPG",
-        "104707.png", "104707.jpg", "104707_2.png", "poster.jpg"
+        "Template.jpg", "Template.png", "104707.png", "104707.jpg", "poster.jpg"
     ]
-    for name in possible_names:
+    for name in priority_names:
         if os.path.exists(name):
             try:
                 img = Image.open(name).convert("RGB")
-                print(f"✅ Template successfully loaded from: {name}")
+                print(f"✅ Found template by direct name: {name}")
                 return img
             except Exception as e:
-                print(f"Error loading {name}: {e}")
+                print(f"Error opening {name}: {e}")
 
-    # Fallback to wildcard search in directory
-    for match in glob.glob("*template*.*") + glob.glob("*104707*.*"):
-        try:
-            img = Image.open(match).convert("RGB")
-            print(f"✅ Template loaded via pattern match: {match}")
-            return img
-        except Exception:
-            pass
+    # Priority 2: Auto-scan all images in repo
+    for fname in os.listdir("."):
+        if fname.lower().endswith((".jpg", ".png", ".jpeg")) and fname.lower() not in ["start.jpg", "rohit_chauhan_vip.jpg"]:
+            try:
+                img = Image.open(fname).convert("RGB")
+                if img.size[0] >= 500 and img.size[1] >= 500:
+                    print(f"✅ Auto-detected template file in folder: {fname} (Size: {img.size})")
+                    return img
+            except Exception:
+                continue
 
-    print("⚠️ No template file found in directory! Creating default canvas.")
+    print("⚠️ No template file found in directory! Creating fallback canvas.")
     return Image.new("RGB", (2048, 2048), color=(20, 20, 20))
 
 # --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
 def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
     try:
         base_img = load_base_template()
-        # Resize to standard 2048x2048 for uniform pixel precision
         if base_img.size != (2048, 2048):
             base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
-
-        w, h = base_img.size
 
         # 1. Left Box (Thumbnail Frame: x: 95-705, y: 1490-1930)
         lx1, ly1, lx2, ly2 = 95, 1490, 705, 1930
@@ -150,7 +149,7 @@ def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
         # Clean dark backdrop to cover previous placeholder text
         draw.rectangle([(rx1, ry1), (rx2, ry2)], fill=(12, 4, 4))
 
-        # Font setup (65px for crisp readability)
+        # Font setup (65px)
         font_size = 65
         font = None
         for font_path in [
@@ -168,7 +167,6 @@ def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
         if font is None:
             font = ImageFont.load_default()
 
-        # Wrap song title into 2 clean lines
         clean_title = song_title.replace(".mp3", "").strip()
         lines = textwrap.wrap(clean_title, width=22)
         if len(lines) > 2:
@@ -193,8 +191,10 @@ def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
             draw.text((cur_x, cur_y), line, fill=(255, 215, 0), font=font)
             cur_y += line_spacing
 
+        # Resize to sharp 1280x1280 for fast Telegram delivery
+        final_img = base_img.resize((1280, 1280), Image.Resampling.LANCZOS)
         out = io.BytesIO()
-        base_img.save(out, format="JPEG", quality=92)
+        final_img.save(out, format="JPEG", quality=88)
         out.seek(0)
         return out
     except Exception as e:
