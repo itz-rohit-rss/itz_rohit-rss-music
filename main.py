@@ -17,10 +17,8 @@ import yt_dlp
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
-# Ensure absolute directory paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
-os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+# Ensure downloads directory exists
+os.makedirs("downloads", exist_ok=True)
 
 # --- 1. SYSTEM & NIX FFPROBE/FFMPEG AUTO-LINK ---
 nix_candidate_dirs = [
@@ -44,46 +42,38 @@ if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
     except Exception as e:
         print(f"Static ffmpeg load note: {e}")
 
-# --- 2. TEMPLATE POSTER RESOLVER (ABSOLUTE PATH) ---
-TEMPLATE_PATH = os.path.join(BASE_DIR, "template.jpg")
-RAW_GITHUB_TEMPLATE = "https://raw.githubusercontent.com/itz-rohit-rss/itz_rohit-rss-music/main/template.jpg"
+# --- 2. DIRECT TEMPLATE URL (CATBOX CDN) ---
+DEFAULT_TEMPLATE_URL = "https://files.catbox.moe/ze8smq.png"
+TEMPLATE_URL = os.environ.get("TEMPLATE_URL", DEFAULT_TEMPLATE_URL).strip()
+CACHED_BASE_IMG = None
 
-def load_rohit_template() -> Image.Image:
-    # 1. Check BASE_DIR /app/template.jpg
-    search_locations = [
-        TEMPLATE_PATH,
-        os.path.join(BASE_DIR, "template.png"),
-        os.path.join(BASE_DIR, "1793969924167.png"),
-        "template.jpg",
-        "template.png",
-        "/app/template.jpg"
-    ]
-    for loc in search_locations:
-        if os.path.isfile(loc) and os.path.getsize(loc) > 10000:
-            try:
-                with open(loc, "rb") as f:
-                    img = Image.open(io.BytesIO(f.read())).convert("RGB")
-                print(f"🔥 TEMPLATE LOADED FROM DISK: {loc} ({img.size})")
-                return img
-            except Exception as e:
-                print(f"Error loading {loc}: {e}")
-
-    # 2. Direct Web Fetch Backup
-    print("⏳ Downloading template directly from GitHub Raw...")
+async def init_template_cache():
+    global CACHED_BASE_IMG
+    print(f"⏳ Downloading template directly from Catbox URL: {TEMPLATE_URL} ...")
     try:
-        req = urllib.request.Request(RAW_GITHUB_TEMPLATE, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = resp.read()
-            with open(TEMPLATE_PATH, "wb") as f:
-                f.write(data)
-            img = Image.open(io.BytesIO(data)).convert("RGB")
-            print(f"🔥 TEMPLATE DOWNLOADED & SAVED TO: {TEMPLATE_PATH}")
-            return img
+        async with aiohttp.ClientSession() as session:
+            async with session.get(TEMPLATE_URL, timeout=30) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    img = Image.open(io.BytesIO(data)).convert("RGB")
+                    if img.size != (2048, 2048):
+                        img = img.resize((2048, 2048), Image.Resampling.LANCZOS)
+                    CACHED_BASE_IMG = img
+                    print(f"🔥 TEMPLATE IMAGE LOADED & CACHED IN RAM! Size: {CACHED_BASE_IMG.size}")
+                    return
     except Exception as e:
-        print(f"GitHub template fetch error: {e}")
+        print(f"URL Fetch failed: {e}")
 
-    # If completely unavailable, create a fallback
-    return Image.new("RGB", (2048, 2048), color=(30, 0, 0))
+    # Fallback to local files if present
+    for local_name in ["template.jpg", "template.png", "1793969924167.png"]:
+        if os.path.exists(local_name):
+            try:
+                img = Image.open(local_name).convert("RGB")
+                CACHED_BASE_IMG = img.resize((2048, 2048), Image.Resampling.LANCZOS)
+                print(f"🔥 Template loaded from local disk: {local_name}")
+                return
+            except Exception:
+                pass
 
 # --- 3. COOKIES AUTO-FETCHER ---
 cookies_url = os.environ.get("COOKIES_URL")
@@ -98,10 +88,7 @@ if cookies_url:
     except Exception as e:
         print(f"⚠️ Cookies download warning: {e}")
 
-# Pre-load template on startup to verify
-load_rohit_template()
-
-# --- 4. CONFIGS & CLIENT SETUP ---
+# Client Setup
 raw_api_id = os.environ.get("API_ID", "35744976").replace('"', '').replace("'", "").strip()
 API_ID = int(raw_api_id) if raw_api_id.isdigit() else 35744976
 
@@ -114,7 +101,7 @@ STRING_SESSION = raw_string.replace('"', '').replace("'", "").strip()
 raw_owner = os.environ.get("OWNER_ID", "7885190981").replace('"', '').replace("'", "").strip()
 OWNER_ID = int(raw_owner) if raw_owner.isdigit() else 7885190981
 
-START_IMG = os.path.join(BASE_DIR, "start.jpg") if os.path.exists(os.path.join(BASE_DIR, "start.jpg")) else "https://telegra.ph/file/0c9769399df3d854eb094.jpg"
+START_IMG = "start.jpg" if os.path.exists("start.jpg") else "https://telegra.ph/file/0c9769399df3d854eb094.jpg"
 
 bot = Client("rohit_music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("rohit_assistant", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
@@ -135,11 +122,14 @@ RANDOM_TAG_MESSAGES = [
     "Jalwa dekho aur online aao jaldi!"
 ]
 
-# --- DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
+# --- 4. DYNAMIC 2-BOX TEMPLATE POSTER GENERATOR ---
 def create_custom_poster(thumb_bytes: bytes, song_title: str) -> io.BytesIO:
-    base_img = load_rohit_template()
-    if base_img.size != (2048, 2048):
-        base_img = base_img.resize((2048, 2048), Image.Resampling.LANCZOS)
+    global CACHED_BASE_IMG
+    if CACHED_BASE_IMG is None:
+        return io.BytesIO(thumb_bytes) if thumb_bytes else None
+
+    # Clean copy of cached poster
+    base_img = CACHED_BASE_IMG.copy()
 
     # 1. Left Box (Thumbnail Frame: x: 95-705, y: 1490-1930)
     lx1, ly1, lx2, ly2 = 95, 1490, 705, 1930
@@ -248,7 +238,7 @@ def get_player_buttons(chat_id: int):
 
 # --- 5. HIGH-SPEED AUDIO ENGINE ---
 async def fetch_local_audio(query: str, chat_id: int):
-    for f in glob.glob(os.path.join(DOWNLOADS_DIR, f"{chat_id}.*")):
+    for f in glob.glob(f"downloads/{chat_id}.*"):
         try:
             os.remove(f)
         except Exception:
@@ -260,10 +250,9 @@ async def fetch_local_audio(query: str, chat_id: int):
         is_link = query.startswith("http://") or query.startswith("https://")
         sources = [query] if is_link else [f"scsearch1:{query}", f"ytsearch1:{query}"]
 
-        out_template = os.path.join(DOWNLOADS_DIR, f"{chat_id}.%(ext)s")
         ydl_opts = {
             "format": "bestaudio/best",
-            "outtmpl": out_template,
+            "outtmpl": f"downloads/{chat_id}.%(ext)s",
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
@@ -286,7 +275,7 @@ async def fetch_local_audio(query: str, chat_id: int):
                     if 'entries' in info and info['entries']:
                         info = info['entries'][0]
 
-                    files = glob.glob(os.path.join(DOWNLOADS_DIR, f"{chat_id}.*"))
+                    files = glob.glob(f"downloads/{chat_id}.*")
                     if files:
                         return {
                             "file_path": files[0],
@@ -370,7 +359,7 @@ async def stream_update_handler(client, update):
             else:
                 try:
                     await client.leave_call(chat_id)
-                    for f in glob.glob(os.path.join(DOWNLOADS_DIR, f"{chat_id}.*")):
+                    for f in glob.glob(f"downloads/{chat_id}.*"):
                         try:
                             os.remove(f)
                         except Exception:
@@ -484,7 +473,7 @@ async def all_callback_handler(client, callback_query: CallbackQuery):
             except Exception:
                 pass
             autoplay_enabled[target_cid] = False
-            for f in glob.glob(os.path.join(DOWNLOADS_DIR, f"{target_cid}.*")):
+            for f in glob.glob(f"downloads/{target_cid}.*"):
                 try:
                     os.remove(f)
                 except Exception:
@@ -609,7 +598,7 @@ async def stop_handler(client, message):
     except Exception:
         pass
     autoplay_enabled[message.chat.id] = False
-    for f in glob.glob(os.path.join(DOWNLOADS_DIR, f"{message.chat.id}.*")):
+    for f in glob.glob(f"downloads/{message.chat.id}.*"):
         try:
             os.remove(f)
         except Exception:
@@ -689,6 +678,7 @@ async def cancel_handler(client, message):
 
 # --- 11. BOT LAUNCH ---
 async def start_services():
+    await init_template_cache()
     await bot.start()
     await user.start()
     
